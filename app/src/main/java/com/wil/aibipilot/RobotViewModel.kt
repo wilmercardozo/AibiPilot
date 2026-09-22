@@ -466,7 +466,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         log("Pidiendo al robot que envíe fotos a $ip:${PhotoTcpServer.PORT}")
-        send(Protocol.photoSync(ip, PhotoTcpServer.PORT), "photo sync $ip:9090")
+        ensureMode("photo") {
+            send(Protocol.photoSync(ip, PhotoTcpServer.PORT), "photo sync $ip:9090")
+        }
     }
 
     fun stopPhotoSync() {

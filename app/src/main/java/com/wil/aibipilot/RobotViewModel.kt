@@ -101,6 +101,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private var reconnectAttempt = 0
     private var reconnectCancelled = false
     private var reconnectInFlight = false
+    private var diagnosePending = false
     private var connectTimeoutJob: kotlinx.coroutines.Job? = null
     private var lastRxAt = 0L
     private var lastTxAt = 0L
@@ -223,6 +224,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         if (!isReconnect) {
             reconnectCancelled = false
             reconnectInFlight = false
+            diagnosePending = true
             reconnectAttempt = 0
             reconnectJob?.cancel()
             _ui.update { it.copy(reconnectAttempt = 0, connHint = null) }
@@ -315,6 +317,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 val device = btManager.adapter.getRemoteDevice(mac)
                 connectDevice(device, prefs().getString(KEY_NAME, null), isReconnect = true)
             } catch (e: Exception) {
+                reconnectInFlight = false
                 _ui.update { it.copy(conn = ConnState.DISCONNECTED, reconnectAttempt = 0) }
                 log(LogCat.ERR, "Reconexión fallida: ${e.message}")
             }
@@ -323,6 +326,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Diagnóstico tras timeout de conexión: re-scan de 5s del MAC guardado. */
     private fun diagnoseConnectFailure(mac: String) {
+        if (!diagnosePending) return
+        diagnosePending = false
         viewModelScope.launch {
             var seen = false
             try {
@@ -410,8 +415,13 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 val eventName = root["data"]?.jsonObject?.get("event")?.jsonPrimitive?.contentOrNull
                 log(LogCat.EVT, "Evento robot: $eventName")
                 if (eventName == "modeout") {
-                    currentMode = null
-                    log("El robot salió del modo de función")
+                    val evCurrent = root["data"]?.jsonObject?.get("current")?.jsonPrimitive?.contentOrNull
+                    if (evCurrent == null || evCurrent == currentMode) {
+                        currentMode = null
+                        log(LogCat.EVT, "El robot salió del modo de función")
+                    } else {
+                        log(LogCat.EVT, "modeout de un modo anterior ($evCurrent), ignorado")
+                    }
                 }
             }
             "alarm_rsp" -> parseAlarmRsp(root)

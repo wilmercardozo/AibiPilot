@@ -147,7 +147,7 @@ class BleClient(private val context: Context) {
         rxBuffer.reset()
         rxTotal = -1
         Log.d(TAG, "connectGatt -> ${device.name} ${device.address}")
-        val g = try {
+        val g: BluetoothGatt? = try {
             device.connectGatt(
                 context, false,
                 object : BluetoothGattCallback() {
@@ -203,11 +203,12 @@ class BleClient(private val context: Context) {
         )
         } catch (e: Exception) {
             Log.e(TAG, "connectGatt exception: ${e.message}", e)
-            null
+            android.os.Handler(android.os.Looper.getMainLooper()).post { onState(false) }
+            return
         }
         if (g == null) {
             Log.e(TAG, "connectGatt returned null")
-            onState(false)
+            android.os.Handler(android.os.Looper.getMainLooper()).post { onState(false) }
             return
         }
         this.gatt = g

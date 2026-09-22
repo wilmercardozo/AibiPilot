@@ -44,7 +44,7 @@ class PhotoTcpServer(
         private const val END_OF_MESSAGE = '#'
         private const val DELIMITED = "------"
         private const val FINISH = "finish"
-        private const val SOCKET_TIMEOUT_MS = 10_000
+        private const val SOCKET_TIMEOUT_MS = 30_000
     }
 
     @Volatile

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.TheaterComedy
 import androidx.compose.material.icons.filled.WaterDrop
@@ -92,6 +93,7 @@ private enum class ToolTab(val label: String, val icon: ImageVector) {
     RUTINAS("Rutinas", Icons.Default.Schedule),
     FOTOS("Fotos", Icons.Default.PhotoCamera),
     REMOTO("Remoto", Icons.Default.Cloud),
+    LABORATORIO("Laboratorio", Icons.Default.Science),
     LOG("Log BLE", Icons.Default.Terminal),
 }
 
@@ -123,6 +125,7 @@ fun ToolsScreen(vm: RobotViewModel, ui: UiState) {
             ToolTab.RUTINAS -> RoutinesPane(vm, ui)
             ToolTab.FOTOS -> PhotosPane(vm, ui)
             ToolTab.REMOTO -> RemotePane(vm, ui)
+            ToolTab.LABORATORIO -> LabPane(vm, ui)
             ToolTab.LOG -> LogPane(vm, ui)
         }
     }
@@ -907,6 +910,135 @@ private fun RemotePane(vm: RobotViewModel, ui: UiState) {
                     )
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Laboratorio (spec C4: consola JSON raw)
+// ---------------------------------------------------------------------------
+
+private data class LabTemplate(val label: String, val json: String)
+
+private val labTemplates = listOf(
+    LabTemplate("sta query", """{"type":"sta_req","data":{"op":"query","list":[1,8,11,12]}}"""),
+    LabTemplate("show speak", """{"type":"show_req","data":{"op":"speak","txt":"hola"}}"""),
+    LabTemplate("show play", """{"type":"show_req","data":{"op":"play","animation":"dance_ai1"}}"""),
+    LabTemplate("light set", """{"type":"light_req","data":{"op":"set","id":0,"mode":"flow","color":[255,80,180],"brightness":90}}"""),
+    LabTemplate("alarm list", """{"type":"alarm_req","data":{"op":"list"}}"""),
+    LabTemplate("alarm add", """{"type":"alarm_req","data":{"op":"add","tag":0,"time":"08:00"}}"""),
+    LabTemplate("alarm del", """{"type":"alarm_req","data":{"op":"del","index":0}}"""),
+    LabTemplate("game in", """{"type":"chess_req","data":{"op":"in"}}"""),
+    LabTemplate("game start", """{"type":"chess_req","data":{"op":"start"}}"""),
+    LabTemplate("game play", """{"type":"chess_req","data":{"op":"play"}}"""),
+    LabTemplate("photo in", """{"type":"photo_req","data":{"op":"in"}}"""),
+    LabTemplate("photo sync", """{"type":"photo_req","data":{"op":"sync","server":{"ip":"TU_IP","port":9090}}}"""),
+)
+
+@Composable
+private fun LabPane(vm: RobotViewModel, ui: UiState) {
+    var editor by rememberSaveable { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                Text("Comando JSON", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = editor,
+                    onValueChange = { editor = it; error = false },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("JSON") },
+                    placeholder = { Text("{\"type\":\"sta_req\",\"data\":{\"op\":\"query\",\"list\":[12]}}") },
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    minLines = 4,
+                    maxLines = 8,
+                    isError = error,
+                    supportingText = if (error) {
+                        { Text("JSON inválido") }
+                    } else {
+                        null
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+                PrimaryButton(
+                    text = "Enviar",
+                    onClick = { if (!vm.sendRaw(editor)) error = true },
+                    enabled = editor.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Las respuestas del robot se ven en la sub-pestaña Log BLE.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                Text("Plantillas", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    labTemplates.forEach { t ->
+                        FilterChip(
+                            selected = false,
+                            onClick = { editor = t.json; error = false },
+                            label = { Text(t.label) },
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Historial (${ui.rawHistory.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = TextPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { vm.clearRawHistory() }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Limpiar historial", tint = TextSecondary)
+                    }
+                }
+                if (ui.rawHistory.isEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Los comandos enviados aparecen acá. Tocalos para rellenar el editor.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                } else {
+                    ui.rawHistory.asReversed().forEach { entry ->
+                        Text(
+                            text = entry,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = TextPrimary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { editor = entry; error = false }
+                                .padding(vertical = 6.dp),
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            Text(
+                "Capturar la app oficial: adb logcat | grep BleUtils",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary,
+                fontFamily = FontFamily.Monospace,
+            )
         }
     }
 }

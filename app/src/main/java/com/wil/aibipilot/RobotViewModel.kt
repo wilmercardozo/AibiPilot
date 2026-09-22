@@ -26,6 +26,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -154,6 +158,7 @@ data class UiState(
     val themeMode: String = "system",
     val remoteRunning: Boolean = false,
     val routines: List<Routine> = emptyList(),
+    val rawHistory: List<String> = emptyList(),
     val snackbar: String? = null
 )
 
@@ -166,6 +171,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_REMOTE_TOKEN = "remote_token"
         private const val KEY_REMOTE_PORT = "remote_port"
+        private const val KEY_RAW_HISTORY = "raw_history"
+        private const val MAX_RAW_HISTORY = 50
     }
 
     val ble = BleClient(app)
@@ -174,7 +181,12 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         loadThemeMode()
-        _ui.update { it.copy(routines = RoutinesStore.load(getApplication())) }
+        _ui.update {
+            it.copy(
+                routines = RoutinesStore.load(getApplication()),
+                rawHistory = loadRawHistory()
+            )
+        }
         RoutineScheduler.schedule(getApplication())
         viewModelScope.launch {
             RemoteStateBus.running.collect { running ->
@@ -944,6 +956,50 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearLog() {
         _ui.update { it.copy(log = emptyList()) }
+    }
+
+    // ------------------------------------------------------------------
+    // Laboratorio (spec C4): consola JSON raw
+    // ------------------------------------------------------------------
+    private val rawHistorySerializer = ListSerializer(String.serializer())
+
+    private fun loadRawHistory(): List<String> {
+        val raw = prefs().getString(KEY_RAW_HISTORY, null) ?: return emptyList()
+        return try {
+            Protocol.json.decodeFromString(rawHistorySerializer, raw)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Envía un comando JSON crudo al robot (consola Laboratorio). Valida el
+     * JSON con Protocol.json, lo envuelve con Protocol.frame y lo envía por
+     * el camino send() normal (TX/RX visibles en el Log BLE). Devuelve false
+     * si el JSON es inválido (y muestra el error).
+     */
+    fun sendRaw(json: String): Boolean {
+        val text = json.trim()
+        if (text.isEmpty()) return false
+        return try {
+            Protocol.json.parseToJsonElement(text)
+            val updated = (_ui.value.rawHistory + text).takeLast(MAX_RAW_HISTORY)
+            _ui.update { it.copy(rawHistory = updated) }
+            prefs().edit()
+                .putString(KEY_RAW_HISTORY, Protocol.json.encodeToString(rawHistorySerializer, updated))
+                .apply()
+            send(Protocol.frame(text), "raw ${text.take(40)}")
+            true
+        } catch (e: Exception) {
+            log(LogCat.ERR, "JSON inválido: ${e.message}")
+            showSnackbar("JSON inválido: ${e.message}")
+            false
+        }
+    }
+
+    fun clearRawHistory() {
+        _ui.update { it.copy(rawHistory = emptyList()) }
+        prefs().edit().remove(KEY_RAW_HISTORY).apply()
     }
 
     // ------------------------------------------------------------------

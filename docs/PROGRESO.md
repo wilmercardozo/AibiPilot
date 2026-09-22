@@ -69,3 +69,33 @@ Estado: **COMPLETO**. Verificado en vivo con el robot salvo lo ambiental.
 - ~10 despachos flash (dev/QA) + 2 pro (ux DESIGN.md + QA senior) en pestañas Herdr.
 - El checkpoint de DESIGN.md con el usuario evitó retrabajo; los QA flash siguieron rindiendo
   (2 desvíos menores capturados y resueltos en T8).
+
+## 2026-09-22 — Plan "features nuevas" (subproyecto C)
+
+Estado: **COMPLETO**. C1 verificado de punta a punta en vivo; C2-C4 verificados por QA +
+pruebas en vivo parciales (robot se durmió en tramos de sesiones largas).
+
+### Resultado
+- **C1 Modo remoto (Hermes)**: API HTTP local (puerto 8080, token Bearer) + foreground service
+  que toma LA conexión BLE + toggle/config en Herramientas + `docs/HERMES.md`. En vivo con
+  curl: 401 sin token, /status, /speak (el robot habló), /play, /volume, /light/on.
+  Fix de evidencia en vivo: timeout de comandos 8s→15s (TTS del robot tarda ~11s).
+- **C2 Chat IA con contexto**: bloque de estado del robot (batería/pasos/monedas/comida/hora)
+  en el system prompt + plantilla de sistema editable.
+- **C3 Rutinas + notificaciones**: WorkManager 15 min, CRUD con UI (hora, días L-D, acción),
+  ventana [ahora-14min, ahora] con wrap de medianoche, ejecución vía servicio (remoto ON) o
+  notificación + `run_routine_id` (singleTop/onNewIntent), notificaciones de batería baja y
+  desconexión. En vivo: rutina 15:34 ejecutada → `show_speak_ok`.
+- **C4 Laboratorio**: consola JSON raw con 12 plantillas e historial. En vivo: sta query →
+  `sta_query_ok`.
+
+### Aparcado
+- Ejecución del worker con remoto ON (ventana de 15 min) y notificación "Rutina pendiente" —
+  no observadas en vivo; cubiertas por QA de código.
+- Token de prueba en la tablet: cambiarlo antes de usar Hermes en serio.
+- Backlog C5: gamificación, editor de escenas, widget, UI de juegos, botón "Abrir" galería.
+- Transferencia real de fotos (WiFi del robot, heredado de A/B).
+
+### Costo del plan
+- ~9 despachos flash + 2 pro (QA senior + re-verificación) en Herdr; 3 fix loops con hallazgos
+  reales (modo alarm, wrap de medianoche, doble instancia MainActivity).

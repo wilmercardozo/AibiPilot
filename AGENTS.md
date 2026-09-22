@@ -69,7 +69,23 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - `ui/HomeScreen.kt` (dashboard) · `ChatScreen.kt` · `TalkScreen.kt` · `GamesScreen.kt` ·
   `ToolsScreen.kt` (Luces/Alarmas/Fotos/Log BLE)
 - `ui/theme/Theme.kt` (tema "Tech limpio" oscuro/claro/sistema) · `ui/components/Components.kt`
-- `DESIGN.md` — diseño del rediseño UX (sistema visual, pantallas, copy)
+- `ble/RemoteController.kt` — conexión BLE standalone para el modo remoto (ensureMode-lite,
+  un request en vuelo, keep-alive) · `ble/RemoteApiServer.kt` — API HTTP local (token Bearer,
+  puerto 8080, endpoints /status /speak /play /light /volume /alarms /game /scene)
+- `ble/RemoteService.kt` — foreground service (connectedDevice) + RemoteStateBus +
+  ACTION_RUN_ROUTINES · `routines/Routines.kt` + `RoutineWorker.kt` — rutinas programadas
+  (WorkManager 15 min, ventana [ahora-14min, ahora] con wrap de medianoche)
+- `DESIGN.md` — diseño del rediseño UX (sistema visual, pantallas, copy) · `docs/HERMES.md` —
+  guía de integración con Hermes Agent (modo remoto)
+
+## Datos del modo remoto y rutinas (subproyecto C, verificado en vivo 22 sep)
+- Modo remoto: toggle en Herramientas → servicio foreground toma LA conexión BLE (una a la
+  vez: la UI no conecta con remoto activo). Token Bearer obligatorio en prefs `remote_token`.
+- Los ACK de comandos remotos tardan: TTS hasta ~11s → timeout de comandos del controller 15s.
+- Rutinas: ejecución sin remoto vía notificación → intent `run_routine_id` → MainActivity
+  (singleTop + onNewIntent) ejecuta con la máquina normal.
+- Prueba con curl desde la workstation: `adb forward tcp:8080 tcp:8080` + curl a
+  localhost:8080 (el server bindea 0.0.0.0; la seguridad es el token).
 
 ## Datos del rediseño UX (subproyecto B, verificado en vivo 22 sep)
 - Tema: oscuro por defecto + toggle Sistema/Claro/Oscuro (diálogo Apariencia en el header)

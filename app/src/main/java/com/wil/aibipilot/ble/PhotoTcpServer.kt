@@ -11,17 +11,27 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketTimeoutException
 
 /**
  * Servidor TCP para recibir fotos del robot.
  *
  * Protocolo reconstruido de TcpServerUtil (app oficial, TcpServer.kt):
  *  - El robot conecta por TCP como cliente al puerto 9090 del teléfono.
- *  - Por cada archivo envía:  "finish;name=<nombre>;filesize=<N>;delimited=------#"
- *    seguido de N bytes de imagen, y termina con "------------------" (18 guiones).
+ *  - Por cada archivo envía una cabecera terminada en '#':
+ *    "name=<nombre>;filesize=<N>;delimited=<X>#", seguida de N bytes de imagen,
+ *    y termina con "------<X>------" (con X="------" son 18 guiones).
  *  - La app guarda el archivo y responde "ok".
- *  - La sesión termina cuando el robot cierra la conexión.
+ *  - Al terminar todos los archivos el robot envía "finish" (6 bytes) y cierra.
  *  - Codificación ISO-8859-1 en todo el intercambio.
+ *
+ * Regla exacta del parser oficial (TcpServerUtil$handleClientSocket$2):
+ *  lee los primeros 6 bytes de cada mensaje; si son exactamente "finish" (y no
+ *  hay más datos) es el fin de la sincronización; en caso contrario la cabecera
+ *  es "esos 6 bytes + el resto hasta '#'". Por eso la cabecera NO comienza con
+ *  "finish;": un prefijo "finish" se interpretaría como fin de sesión. Este
+ *  servidor aplica la misma regla y además tolera una cabecera con prefijo
+ *  "finish;" (parseHeader ignora el token sin '=').
  */
 class PhotoTcpServer(
     private val outputDir: File,
@@ -33,6 +43,8 @@ class PhotoTcpServer(
         private const val TAG = "PhotoTcpServer"
         private const val END_OF_MESSAGE = '#'
         private const val DELIMITED = "------"
+        private const val FINISH = "finish"
+        private const val SOCKET_TIMEOUT_MS = 10_000
     }
 
     @Volatile
@@ -75,20 +87,24 @@ class PhotoTcpServer(
 
     private fun handleClient(socket: Socket) {
         try {
+            socket.soTimeout = SOCKET_TIMEOUT_MS
             val input: InputStream = BufferedInputStream(socket.getInputStream())
             val output: OutputStream = BufferedOutputStream(socket.getOutputStream())
             while (!socket.isClosed()) {
-                // 1) prefijo "finish" (6 bytes)
-                val prefix = readExact(input, 6)
-                if (prefix == null) break
+                // 1) primeros 6 bytes: "finish" solo = fin de la sincronización
+                val prefix = readExact(input, FINISH.length) ?: break
                 val prefixStr = String(prefix, Charsets.ISO_8859_1)
-                if (prefixStr != "finish") {
-                    onLog("Cabecera TCP inesperada: \"$prefixStr\" — cerrando")
+                // 2) resto de la cabecera hasta '#'
+                val rest = readUntil(input, END_OF_MESSAGE.code.toByte())
+                val restStr = rest?.let { String(it, Charsets.ISO_8859_1) } ?: ""
+                if (prefixStr == FINISH && restStr.isEmpty()) {
+                    onLog("finish recibido: fin de la sincronización de fotos")
                     break
                 }
-                // 2) campos hasta '#'
-                val header = readUntil(input, END_OF_MESSAGE.code.toByte()) ?: break
-                val fields = parseHeader(String(header, Charsets.ISO_8859_1))
+                // 3) cabecera completa = 6 bytes + resto (p.ej. "name=x;filesize=..;delimited=..")
+                val header = prefixStr + restStr
+                onLog("Cabecera TCP: $header")
+                val fields = parseHeader(header)
                 val name = fields["name"]
                 val size = fields["filesize"]?.toIntOrNull()
                 val delimited = fields["delimited"] ?: DELIMITED
@@ -97,10 +113,10 @@ class PhotoTcpServer(
                     break
                 }
                 onLog("Recibiendo \"$name\" ($size bytes)")
-                // 3) N bytes de imagen
+                // 4) N bytes de imagen
                 val imageData = readExact(input, size)
                 if (imageData == null) break
-                // 4) marcador final: ------<delimited>------ 
+                // 5) marcador final: ------<delimited>------ 
                 val endMarker = DELIMITED + delimited + DELIMITED
                 val marker = readExact(input, endMarker.length)
                 if (marker == null) break
@@ -118,6 +134,12 @@ class PhotoTcpServer(
             }
             socket.close()
             onLog("Transferencia de fotos finalizada")
+        } catch (e: SocketTimeoutException) {
+            onLog("Sin datos del robot (timeout ${SOCKET_TIMEOUT_MS}ms): fin de la sincronización")
+            try {
+                socket.close()
+            } catch (_: Exception) {
+            }
         } catch (e: Exception) {
             onLog("Error TCP: ${e.message}")
             try {
@@ -152,7 +174,7 @@ class PhotoTcpServer(
         }
     }
 
-    /** "finish;name=x.jpg;filesize=123;delimited=------" -> mapa (salta tokens sin '='). */
+    /** "name=x.jpg;filesize=123;delimited=------" -> mapa (salta tokens sin '='). */
     private fun parseHeader(text: String): Map<String, String> {
         val map = LinkedHashMap<String, String>()
         text.split(";").forEach { token ->

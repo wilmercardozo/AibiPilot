@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import com.wil.aibipilot.ConnState
 import com.wil.aibipilot.RobotViewModel
 import com.wil.aibipilot.UiState
+import com.wil.aibipilot.batteryLabel
 import com.wil.aibipilot.ui.components.AppCard
 import com.wil.aibipilot.ui.components.SectionTitle
 import com.wil.aibipilot.ui.components.StatusPill
@@ -74,14 +75,6 @@ private data class Scene(
     val subtitle: String,
     val icon: ImageVector,
 )
-
-private fun batteryLabel(level: Int?): String = when (level) {
-    1 -> "Baja"
-    2 -> "Media"
-    3 -> "Alta"
-    4 -> "Llena"
-    else -> "—"
-}
 
 @Composable
 fun HomeScreen(vm: RobotViewModel, ui: UiState) {

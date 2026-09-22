@@ -61,6 +61,18 @@ enum class LogCat { TX, RX, EVT, ERR, SYS }
 
 data class LogLine(val cat: LogCat, val text: String)
 
+fun batteryLabel(level: Int?): String = when (level) {
+    1 -> "Baja"
+    2 -> "Media"
+    3 -> "Alta"
+    4 -> "Llena"
+    else -> "—"
+}
+
+const val DEFAULT_LLM_PROMPT = "Eres AIBI, una mascota robot adorable y pequeña con gran personalidad. " +
+    "Respondes en español, de forma breve (máximo 2 frases), cálida y con humor. " +
+    "Te gusta jugar, animar a tu dueño y hacer bromas tiernas."
+
 data class UiState(
     val conn: ConnState = ConnState.DISCONNECTED,
     val reconnectAttempt: Int = 0,
@@ -815,7 +827,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     data class LlmConfig(
         val baseUrl: String = "https://api.openai.com/v1/chat/completions",
         val apiKey: String = "",
-        val model: String = "gpt-4o-mini"
+        val model: String = "gpt-4o-mini",
+        val systemPrompt: String? = null
     )
 
     private val llmClient = okhttp3.OkHttpClient.Builder()
@@ -825,7 +838,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     fun loadLlmConfig(): LlmConfig = LlmConfig(
         baseUrl = prefs().getString("llm_url", LlmConfig().baseUrl) ?: LlmConfig().baseUrl,
         apiKey = prefs().getString("llm_key", "") ?: "",
-        model = prefs().getString("llm_model", LlmConfig().model) ?: LlmConfig().model
+        model = prefs().getString("llm_model", LlmConfig().model) ?: LlmConfig().model,
+        systemPrompt = prefs().getString("llm_prompt", null)
     )
 
     fun saveLlmConfig(cfg: LlmConfig) {
@@ -833,6 +847,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             .putString("llm_url", cfg.baseUrl)
             .putString("llm_key", cfg.apiKey)
             .putString("llm_model", cfg.model)
+            .putString("llm_prompt", cfg.systemPrompt)
             .apply()
     }
 
@@ -905,9 +920,13 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         val cfg = loadLlmConfig()
         if (cfg.apiKey.isBlank()) return null
         val history = _ui.value.chat.takeLast(8)
-        val sysPrompt = "Eres AIBI, una mascota robot adorable y pequeña con gran personalidad. " +
-            "Respondes en español, de forma breve (máximo 2 frases), cálida y con humor. " +
-            "Te gusta jugar, animar a tu dueño y hacer bromas tiernas."
+        val info = _ui.value.info
+        val ctx = buildString {
+            append("Estado actual del robot: ")
+            append("batería=${batteryLabel(info.battery)}, pasos=${info.steps}, monedas=${info.gold}, ")
+            append("comida=${info.food}, hora=${java.time.LocalTime.now()}")
+        }
+        val sysPrompt = (cfg.systemPrompt ?: DEFAULT_LLM_PROMPT) + "\n\n" + ctx
         val body = buildJsonObject {
             put("model", cfg.model)
             put("messages", JsonArray(

@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Key
@@ -38,6 +40,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.wil.aibipilot.ChatMsg
+import com.wil.aibipilot.DEFAULT_LLM_PROMPT
 import com.wil.aibipilot.RobotViewModel
 import com.wil.aibipilot.UiState
 import com.wil.aibipilot.ui.components.EmptyState
@@ -184,7 +187,10 @@ private fun ChatConfigDialog(vm: RobotViewModel, onDismiss: () -> Unit) {
         shape = RoundedCornerShape(16.dp),
         title = { Text("Configuración del chat", style = MaterialTheme.typography.titleMedium) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
                 OutlinedTextField(
                     value = cfg.baseUrl,
                     onValueChange = { cfg = cfg.copy(baseUrl = it) },
@@ -210,6 +216,20 @@ private fun ChatConfigDialog(vm: RobotViewModel, onDismiss: () -> Unit) {
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                OutlinedTextField(
+                    value = cfg.systemPrompt.orEmpty(),
+                    onValueChange = { cfg = cfg.copy(systemPrompt = it.ifBlank { null }) },
+                    label = { Text("Prompt del sistema") },
+                    placeholder = { Text(DEFAULT_LLM_PROMPT) },
+                    minLines = 3,
+                    maxLines = 6,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                TextButton(
+                    onClick = { cfg = cfg.copy(systemPrompt = null) },
+                ) {
+                    Text("Restaurar default")
+                }
                 Text(
                     text = "Ollama local: http://<IP>:11434/v1/chat/completions",
                     style = MaterialTheme.typography.bodySmall,

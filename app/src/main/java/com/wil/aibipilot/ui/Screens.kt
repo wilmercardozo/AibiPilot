@@ -33,12 +33,10 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.RecordVoiceOver
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
@@ -48,7 +46,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -163,14 +160,6 @@ private fun DestinationContent(dest: Destination, vm: RobotViewModel, ui: UiStat
     }
 }
 
-private fun batteryLabel(level: Int?): String = when (level) {
-    1 -> "Baja"
-    2 -> "Media"
-    3 -> "Alta"
-    4 -> "Llena"
-    else -> "—"
-}
-
 @Composable
 private fun ConnectedHeader(vm: RobotViewModel, ui: UiState) {
     var showTheme by remember { mutableStateOf(false) }
@@ -217,100 +206,6 @@ private fun ConnectedHeader(vm: RobotViewModel, ui: UiState) {
         TextButton(onClick = { vm.disconnect() }) {
             Text("Desconectar", color = TextSecondary)
         }
-    }
-}
-
-@Composable
-private fun StatusTab(vm: RobotViewModel, ui: UiState) {
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            ElevatedCard(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(16.dp)) {
-                    InfoCell("Batería", batteryLabel(ui.info.battery), Modifier.weight(1f))
-                    InfoCell("Pasos", ui.info.steps?.toString() ?: "—", Modifier.weight(1f))
-                    InfoCell("Monedas", ui.info.gold?.toString() ?: "—", Modifier.weight(1f))
-                    InfoCell("Comida", ui.info.food?.toString() ?: "—", Modifier.weight(1f))
-                }
-            }
-        }
-        item {
-            ui.info.battery?.let { level ->
-                ElevatedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("Nivel de batería", style = MaterialTheme.typography.titleSmall)
-                        Spacer(Modifier.height(8.dp))
-                        LinearProgressIndicator(
-                            progress = { level / 4f },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            batteryLabel(level),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (level <= 2) Color(0xFFC62828) else Color(0xFF2E7D32)
-                        )
-                    }
-                }
-            }
-        }
-        item {
-            ElevatedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Row {
-                        InfoCell("Versión", ui.info.version.ifEmpty { "—" }, Modifier.weight(1f))
-                        InfoCell("Build", ui.info.versionNumber.ifEmpty { "—" }, Modifier.weight(1f))
-                        InfoCell("MTU", ui.info.mtu.toString(), Modifier.weight(1f))
-                    }
-                }
-            }
-        }
-        item {
-            ElevatedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Volumen", style = MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("mute" to "Silencio", "low" to "Bajo", "high" to "Alto").forEach { (value, label) ->
-                            FilterChip(
-                                selected = ui.volume == value,
-                                onClick = { vm.setVolume(value) },
-                                label = {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (value != "mute") {
-                                            Icon(
-                                                Icons.Default.VolumeUp,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(Modifier.width(4.dp))
-                                        }
-                                        Text(label)
-                                    }
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        item {
-            Button(
-                onClick = { vm.refreshStatus() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Refresh, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Actualizar estado")
-            }
-        }
-    }
-}
-
-@Composable
-private fun InfoCell(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier) {
-        Text(label, style = MaterialTheme.typography.labelSmall)
-        Text(value, style = MaterialTheme.typography.titleMedium)
     }
 }
 

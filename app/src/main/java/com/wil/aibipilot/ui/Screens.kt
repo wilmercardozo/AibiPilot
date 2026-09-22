@@ -1,16 +1,11 @@
 package com.wil.aibipilot.ui
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -27,22 +22,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessAlarm
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.TheaterComedy
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -55,6 +50,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedButton
@@ -73,20 +70,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.wil.aibipilot.ConnState
 import com.wil.aibipilot.LogCat
 import com.wil.aibipilot.RobotViewModel
 import com.wil.aibipilot.UiState
 import com.wil.aibipilot.protocol.Animations
-import kotlin.math.max
+import com.wil.aibipilot.ui.components.StatusPill
+import com.wil.aibipilot.ui.theme.TextPrimary
+import com.wil.aibipilot.ui.theme.TextSecondary
+
+enum class Destination(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    INICIO("Inicio", Icons.Default.Home),
+    CHAT("Chat IA", Icons.Default.AutoAwesome),
+    HABLAR("Hablar", Icons.Default.RecordVoiceOver),
+    JUGAR("Jugar", Icons.Default.SportsEsports),
+    HERRAMIENTAS("Herramientas", Icons.Default.Build),
+}
 
 @Composable
 fun AibiPilotApp(vm: RobotViewModel) {
@@ -95,12 +100,66 @@ fun AibiPilotApp(vm: RobotViewModel) {
         kotlinx.coroutines.delay(400)
         vm.tryAutoReconnect()
     }
-    Scaffold { padding ->
-        when (ui.conn) {
-            ConnState.DISCONNECTED,
-            ConnState.SCANNING -> ScanScreen(vm, ui, Modifier.padding(padding))
-            else -> ConnectedScreen(vm, ui, Modifier.padding(padding))
+    val isTablet = LocalConfiguration.current.screenWidthDp >= 840
+    var dest by rememberSaveable { mutableStateOf(Destination.INICIO) }
+    when {
+        ui.conn == ConnState.CONNECTED ||
+            ui.conn == ConnState.CONNECTING ||
+            ui.conn == ConnState.RECONNECTING -> {
+            if (isTablet) {
+                Row(Modifier.fillMaxSize().padding(16.dp)) {
+                    NavigationRail {
+                        Spacer(Modifier.height(8.dp))
+                        Text("AIBI\nPilot", style = MaterialTheme.typography.titleSmall)
+                        Destination.entries.forEach { d ->
+                            NavigationRailItem(
+                                selected = dest == d,
+                                onClick = { dest = d },
+                                icon = { Icon(d.icon, contentDescription = d.label) },
+                                label = { Text(d.label) }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.fillMaxSize()) {
+                        ConnectedHeader(vm, ui)
+                        Spacer(Modifier.height(12.dp))
+                        DestinationContent(dest, vm, ui)
+                    }
+                }
+            } else {
+                Scaffold(bottomBar = {
+                    NavigationBar {
+                        Destination.entries.forEach { d ->
+                            NavigationBarItem(
+                                selected = dest == d,
+                                onClick = { dest = d },
+                                icon = { Icon(d.icon, contentDescription = d.label) },
+                                label = { Text(d.label) }
+                            )
+                        }
+                    }
+                }) { pad ->
+                    Column(Modifier.fillMaxSize().padding(pad).padding(16.dp)) {
+                        ConnectedHeader(vm, ui)
+                        Spacer(Modifier.height(8.dp))
+                        DestinationContent(dest, vm, ui)
+                    }
+                }
+            }
         }
+        else -> ConnectScreen(vm, ui, Modifier)
+    }
+}
+
+@Composable
+private fun DestinationContent(dest: Destination, vm: RobotViewModel, ui: UiState) {
+    when (dest) {
+        Destination.INICIO -> HomeScreen(vm, ui)
+        Destination.CHAT -> ChatScreen(vm, ui)
+        Destination.HABLAR -> TalkScreen(vm, ui)
+        Destination.JUGAR -> GamesScreen(vm, ui)
+        Destination.HERRAMIENTAS -> ToolsScreen(vm, ui)
     }
 }
 
@@ -113,249 +172,52 @@ private fun batteryLabel(level: Int?): String = when (level) {
 }
 
 @Composable
-private fun ScanScreen(vm: RobotViewModel, ui: UiState, modifier: Modifier) {
-    val context = LocalContext.current
-    var hasPerms by remember {
-        mutableStateOf(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-            } else {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-            }
-        )
-    }
-    val launcher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { result ->
-        hasPerms = result.values.all { it }
-    }
-
-    Column(modifier = modifier.fillMaxSize().padding(24.dp)) {
-        Text("AIBI Pilot", style = MaterialTheme.typography.headlineLarge)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Control alternativo para el robot mascota AIBI Pocket.",
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Spacer(Modifier.height(24.dp))
-
-        if (!hasPerms) {
-            ElevatedCard {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Permisos necesarios", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Para escanear y conectarse por Bluetooth es necesario otorgar permisos.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(onClick = { launcher.launch(vm.ble.requiredPermissions()) }) {
-                        Text("Otorgar permisos")
-                    }
-                }
-            }
-            return@Column
-        }
-
-        if (!vm.ble.isBluetoothEnabled()) {
-            ElevatedCard {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Bluetooth apagado", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Encendé el Bluetooth del teléfono y volvé a intentar.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
-            return@Column
-        }
-
-        ui.connHint?.let { hint ->
-            ElevatedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Aviso", style = MaterialTheme.typography.titleMedium)
-                    Text(hint, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-        }
-
-        Button(
-            onClick = { vm.startScan() },
-            enabled = ui.conn != ConnState.SCANNING
-        ) {
-            Icon(Icons.Default.Search, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(if (ui.conn == ConnState.SCANNING) "Escaneando..." else "Buscar robots")
-        }
-        vm.savedDeviceName()?.let { savedName ->
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = { vm.tryAutoReconnect() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Bluetooth, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Reconectar a $savedName")
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-
-        when {
-            ui.conn == ConnState.SCANNING -> {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Buscando dispositivos \"AIBI\"...")
-                }
-            }
-            ui.devices.isEmpty() -> Text(
-                "No se ven dispositivos todavía. ¿El robot está encendido y cerca?",
-                style = MaterialTheme.typography.bodySmall
-            )
-            else -> Text(
-                "Dispositivos (los \"AIBI\" primero):",
-                style = MaterialTheme.typography.titleMedium
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(ui.devices.distinctBy { it.device.address }) { dev ->
-                val isAibi = dev.device.name?.contains("AIBI", ignoreCase = true) == true
-                ElevatedCard(
-                    Modifier.fillMaxWidth().clickable { vm.connect(dev) }
-                ) {
-                    Row(
-                        Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Bluetooth, contentDescription = null)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                dev.device.name ?: "(sin nombre)",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (isAibi) MaterialTheme.colorScheme.primary else Color.Unspecified
-                            )
-                            Text(
-                                "${dev.device.address}  •  ${dev.rssi} dBm",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        Text(
-                            if (isAibi) "Robot" else "Conectar",
-                            color = if (isAibi) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+private fun ConnectedHeader(vm: RobotViewModel, ui: UiState) {
+    var showTheme by remember { mutableStateOf(false) }
+    if (showTheme) {
+        AlertDialog(
+            onDismissRequest = { showTheme = false },
+            shape = RoundedCornerShape(16.dp),
+            title = { Text("Apariencia", style = MaterialTheme.typography.titleMedium) },
+            text = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        "system" to "Sistema",
+                        "light" to "Claro",
+                        "dark" to "Oscuro"
+                    ).forEach { (mode, label) ->
+                        FilterChip(
+                            selected = ui.themeMode == mode,
+                            onClick = { vm.setThemeMode(mode) },
+                            label = { Text(label) }
                         )
                     }
                 }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTheme = false }) { Text("Cerrar") }
             }
-        }
+        )
     }
-}
-
-private data class TabDef(
-    val label: String,
-    val icon: ImageVector,
-    val content: @Composable (RobotViewModel, UiState) -> Unit
-)
-
-private val tabs = listOf(
-    TabDef("Estado", Icons.Default.MonitorHeart) { vm, ui -> StatusTab(vm, ui) },
-    TabDef("Chat IA", Icons.Default.AutoAwesome) { vm, ui -> ChatTab(vm, ui) },
-    TabDef("Hablar", Icons.Default.RecordVoiceOver) { vm, ui -> TalkTab(vm, ui) },
-    TabDef("Animaciones", Icons.Default.TheaterComedy) { vm, _ -> AnimationsTab(vm) },
-    TabDef("Luces", Icons.Default.LightMode) { vm, ui -> LightsTab(vm, ui) },
-    TabDef("Alarmas", Icons.Default.AccessAlarm) { vm, ui -> AlarmsTab(vm, ui) },
-    TabDef("Juegos", Icons.Default.SportsEsports) { vm, _ -> GamesTab(vm) },
-    TabDef("Fotos", Icons.Default.PhotoCamera) { vm, ui -> PhotosTab(vm, ui) },
-    TabDef("Log BLE", Icons.Default.Terminal) { vm, ui -> LogTab(vm, ui) },
-)
-
-@Composable
-private fun ConnectedScreen(vm: RobotViewModel, ui: UiState, modifier: Modifier) {
-    var tab by rememberSaveable { mutableStateOf(0) }
-    val isTablet = LocalConfiguration.current.screenWidthDp >= 840
-
-    if (isTablet) {
-        Row(modifier = modifier.fillMaxSize().padding(16.dp)) {
-            NavigationRail {
-                Spacer(Modifier.height(8.dp))
-                Column {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 8.dp)
-                    ) {
-                        Text("AIBI\nPilot", style = MaterialTheme.typography.titleSmall)
-                    }
-                }
-                tabs.forEachIndexed { index, tabDef ->
-                    NavigationRailItem(
-                        selected = tab == index,
-                        onClick = { tab = index },
-                        icon = { Icon(tabDef.icon, contentDescription = tabDef.label) },
-                        label = { Text(tabDef.label) }
-                    )
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.fillMaxSize()) {
-                ConnectedHeader(vm, ui)
-                Spacer(Modifier.height(12.dp))
-                tabs[tab].content(vm, ui)
-            }
-        }
-    } else {
-        Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
-            ConnectedHeader(vm, ui)
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.horizontalScroll(rememberScrollState())) {
-                tabs.forEachIndexed { index, tabDef ->
-                    TabChip(tabDef.label, tab == index) { tab = index }
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            tabs[tab].content(vm, ui)
-        }
-    }
-}
-
-@Composable
-private fun ConnectedHeader(vm: RobotViewModel, ui: UiState) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(Modifier.weight(1f)) {
-            Text("AIBI Pilot", style = MaterialTheme.typography.titleLarge)
-            Text(
-                when (ui.conn) {
-                    ConnState.CONNECTED -> "Conectado ✓"
-                    ConnState.RECONNECTING -> "Reconectando… (intento ${ui.reconnectAttempt})"
-                    else -> "Conectando..."
-                },
-                color = when (ui.conn) {
-                    ConnState.CONNECTED -> Color(0xFF2E7D32)
-                    else -> Color(0xFFF9A825)
-                },
-                style = MaterialTheme.typography.bodySmall
-            )
+        Text(
+            "AIBI Pilot",
+            style = MaterialTheme.typography.titleLarge,
+            color = TextPrimary,
+            modifier = Modifier.weight(1f)
+        )
+        StatusPill(ui.conn, ui.reconnectAttempt, ui.connHint)
+        Spacer(Modifier.width(4.dp))
+        IconButton(onClick = { showTheme = true }) {
+            Icon(Icons.Default.Settings, contentDescription = "Apariencia")
         }
-        OutlinedButton(onClick = { vm.disconnect() }) {
-            Text("Desconectar")
+        TextButton(onClick = { vm.disconnect() }) {
+            Text("Desconectar", color = TextSecondary)
         }
     }
-}
-
-@Composable
-private fun TabChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = { Text(label) },
-        modifier = Modifier.padding(end = 8.dp)
-    )
 }
 
 @Composable

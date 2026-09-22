@@ -1,5 +1,6 @@
 package com.wil.aibipilot.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessAlarm
+import androidx.compose.material.icons.filled.Celebration
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DirectionsRun
@@ -28,16 +30,24 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Medication
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.TheaterComedy
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -57,6 +67,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,6 +75,9 @@ import androidx.compose.ui.unit.dp
 import com.wil.aibipilot.LogCat
 import com.wil.aibipilot.RobotViewModel
 import com.wil.aibipilot.UiState
+import com.wil.aibipilot.protocol.Animations
+import com.wil.aibipilot.routines.Routine
+import com.wil.aibipilot.routines.RoutineAction
 import com.wil.aibipilot.ui.components.AppCard
 import com.wil.aibipilot.ui.components.EmptyState
 import com.wil.aibipilot.ui.components.PrimaryButton
@@ -75,6 +89,7 @@ import com.wil.aibipilot.ui.theme.Warning
 private enum class ToolTab(val label: String, val icon: ImageVector) {
     LUCES("Luces", Icons.Default.LightMode),
     ALARMAS("Alarmas", Icons.Default.AccessAlarm),
+    RUTINAS("Rutinas", Icons.Default.Schedule),
     FOTOS("Fotos", Icons.Default.PhotoCamera),
     REMOTO("Remoto", Icons.Default.Cloud),
     LOG("Log BLE", Icons.Default.Terminal),
@@ -105,6 +120,7 @@ fun ToolsScreen(vm: RobotViewModel, ui: UiState) {
         when (tab) {
             ToolTab.LUCES -> LightsPane(vm, ui)
             ToolTab.ALARMAS -> AlarmsPane(vm, ui)
+            ToolTab.RUTINAS -> RoutinesPane(vm, ui)
             ToolTab.FOTOS -> PhotosPane(vm, ui)
             ToolTab.REMOTO -> RemotePane(vm, ui)
             ToolTab.LOG -> LogPane(vm, ui)
@@ -352,6 +368,296 @@ private fun AlarmsPane(vm: RobotViewModel, ui: UiState) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rutinas (spec C3: CRUD local + UI)
+// ---------------------------------------------------------------------------
+
+private val dayLabels = listOf("L", "M", "X", "J", "V", "S", "D")
+
+private val sceneOptions = listOf(
+    "fiesta" to "Fiesta",
+    "despertar" to "Despertar",
+    "relax" to "Relax",
+    "noche" to "Noche",
+)
+
+private val actionOptions = listOf(
+    Triple("speak", "Hablar", Icons.Default.RecordVoiceOver),
+    Triple("animation", "Animación", Icons.Default.TheaterComedy),
+    Triple("scene", "Escena", Icons.Default.Celebration),
+    Triple("light", "Luz", Icons.Default.Lightbulb),
+)
+
+private fun routineActionSummary(action: RoutineAction): String = when (action.type) {
+    "speak" -> "Decir: ${action.payload}"
+    "animation" -> "Animación: " + (Animations.all.firstOrNull { it.id == action.payload }?.label ?: action.payload)
+    "scene" -> "Escena: " + (sceneOptions.firstOrNull { it.first == action.payload }?.second ?: action.payload)
+    "light" -> if (action.payload == "on") "Encender luz" else "Apagar luz"
+    else -> action.type
+}
+
+@Composable
+private fun RoutinesPane(vm: RobotViewModel, ui: UiState) {
+    var showDialog by rememberSaveable { mutableStateOf(false) }
+    var editingId by rememberSaveable { mutableStateOf<String?>(null) }
+    val editing = ui.routines.firstOrNull { it.id == editingId }
+
+    if (showDialog) {
+        RoutineDialog(
+            initial = editing,
+            onDismiss = { showDialog = false; editingId = null },
+            onSave = { routine ->
+                vm.routinesUpsert(routine)
+                showDialog = false
+                editingId = null
+            },
+        )
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            PrimaryButton(
+                text = "Nueva rutina",
+                onClick = { editingId = null; showDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (ui.routines.isEmpty()) {
+            item {
+                EmptyState(
+                    icon = Icons.Default.Schedule,
+                    title = "No hay rutinas",
+                    subtitle = "Programá una acción para que el robot la haga a una hora y días fijos.",
+                )
+            }
+        } else {
+            items(ui.routines) { routine ->
+                AppCard(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { editingId = routine.id; showDialog = true },
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = routine.time,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = TextPrimary,
+                                    fontFamily = FontFamily.Monospace,
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    dayLabels.forEachIndexed { i, label ->
+                                        val active = (i + 1) in routine.days
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (active) MaterialTheme.colorScheme.primary else TextSecondary,
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = routineActionSummary(routine.action),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Switch(
+                            checked = routine.enabled,
+                            onCheckedChange = { vm.routinesToggle(routine.id, it) },
+                        )
+                        IconButton(onClick = { vm.routinesDelete(routine.id) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Borrar rutina", tint = TextSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoutineDialog(
+    initial: Routine?,
+    onDismiss: () -> Unit,
+    onSave: (Routine) -> Unit,
+) {
+    var time by remember(initial?.id) { mutableStateOf(initial?.time ?: "08:00") }
+    var days by remember(initial?.id) { mutableStateOf(initial?.days ?: emptySet()) }
+    var actionType by remember(initial?.id) { mutableStateOf(initial?.action?.type ?: "speak") }
+    var speakText by remember(initial?.id) {
+        mutableStateOf(initial?.action?.takeIf { it.type == "speak" }?.payload ?: "")
+    }
+    var animation by remember(initial?.id) {
+        mutableStateOf(initial?.action?.takeIf { it.type == "animation" }?.payload ?: "dance_ai1")
+    }
+    var scene by remember(initial?.id) {
+        mutableStateOf(initial?.action?.takeIf { it.type == "scene" }?.payload ?: "fiesta")
+    }
+    var lightOn by remember(initial?.id) {
+        mutableStateOf(initial?.action?.takeIf { it.type == "light" }?.payload ?: "on")
+    }
+    var error by remember(initial?.id) { mutableStateOf(false) }
+    val timeValid = Regex("^([01]?\\d|2[0-3]):[0-5]\\d$").matches(time)
+    val canSave = timeValid && days.isNotEmpty()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(16.dp),
+        title = {
+            Text(
+                if (initial == null) "Nueva rutina" else "Editar rutina",
+                style = MaterialTheme.typography.titleMedium,
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = time,
+                    onValueChange = { time = it; error = false },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Hora") },
+                    placeholder = { Text("HH:mm") },
+                    singleLine = true,
+                    isError = error,
+                    supportingText = if (error) {
+                        { Text("Formato HH:mm") }
+                    } else {
+                        null
+                    },
+                )
+                SectionTitle("Días")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    dayLabels.forEachIndexed { i, label ->
+                        val day = i + 1
+                        FilterChip(
+                            selected = day in days,
+                            onClick = {
+                                days = if (day in days) days - day else days + day
+                            },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                SectionTitle("Acción")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    actionOptions.forEach { (type, label, icon) ->
+                        FilterChip(
+                            selected = actionType == type,
+                            onClick = { actionType = type },
+                            label = { Text(label) },
+                            leadingIcon = {
+                                Icon(icon, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize))
+                            },
+                        )
+                    }
+                }
+                when (actionType) {
+                    "speak" -> OutlinedTextField(
+                        value = speakText,
+                        onValueChange = { speakText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Texto para hablar") },
+                        minLines = 2,
+                        maxLines = 4,
+                    )
+                    "animation" -> AnimationSelector(animation) { animation = it }
+                    "scene" -> FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        sceneOptions.forEach { (id, label) ->
+                            FilterChip(
+                                selected = scene == id,
+                                onClick = { scene = id },
+                                label = { Text(label) },
+                            )
+                        }
+                    }
+                    "light" -> FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = lightOn == "on",
+                            onClick = { lightOn = "on" },
+                            label = { Text("Encender") },
+                        )
+                        FilterChip(
+                            selected = lightOn == "off",
+                            onClick = { lightOn = "off" },
+                            label = { Text("Apagar") },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = canSave,
+                onClick = {
+                    if (timeValid && days.isNotEmpty()) {
+                        error = false
+                        val payload = when (actionType) {
+                            "speak" -> speakText
+                            "animation" -> animation
+                            "scene" -> scene
+                            "light" -> lightOn
+                            else -> ""
+                        }
+                        onSave(
+                            Routine(
+                                id = initial?.id ?: java.util.UUID.randomUUID().toString(),
+                                time = time,
+                                days = days,
+                                enabled = initial?.enabled ?: true,
+                                action = RoutineAction(type = actionType, payload = payload),
+                            )
+                        )
+                    } else {
+                        error = true
+                    }
+                },
+            ) { Text("Guardar") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AnimationSelector(selectedId: String, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = Animations.all.firstOrNull { it.id == selectedId }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = selected?.label ?: "",
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Animación") },
+            placeholder = { Text("Elegir animación") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+            singleLine = true,
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            Animations.all.forEach { entry ->
+                DropdownMenuItem(
+                    text = { Text("${entry.label} (${entry.group})") },
+                    onClick = { onSelect(entry.id); expanded = false },
+                )
             }
         }
     }

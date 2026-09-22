@@ -12,6 +12,8 @@ import com.wil.aibipilot.ble.RemoteService
 import com.wil.aibipilot.ble.RemoteStateBus
 import com.wil.aibipilot.ble.ScanDevice
 import com.wil.aibipilot.protocol.Protocol
+import com.wil.aibipilot.routines.Routine
+import com.wil.aibipilot.routines.RoutinesStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
@@ -89,6 +91,7 @@ data class UiState(
     val chatThinking: Boolean = false,
     val themeMode: String = "system",
     val remoteRunning: Boolean = false,
+    val routines: List<Routine> = emptyList(),
     val snackbar: String? = null
 )
 
@@ -109,6 +112,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         loadThemeMode()
+        _ui.update { it.copy(routines = RoutinesStore.load(getApplication())) }
         viewModelScope.launch {
             RemoteStateBus.running.collect { running ->
                 _ui.update { it.copy(remoteRunning = running) }
@@ -154,6 +158,28 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     fun loadThemeMode() {
         val mode = prefs().getString(KEY_THEME_MODE, "system") ?: "system"
         _ui.update { it.copy(themeMode = mode) }
+    }
+
+    // ------------------------------------------------------------------
+    // Rutinas (spec C3): CRUD local con persistencia en RoutinesStore
+    // ------------------------------------------------------------------
+    fun routinesUpsert(routine: Routine) {
+        val updated = (_ui.value.routines.filter { it.id != routine.id } + routine)
+            .sortedBy { it.time }
+        RoutinesStore.save(getApplication(), updated)
+        _ui.update { it.copy(routines = updated) }
+    }
+
+    fun routinesDelete(id: String) {
+        val updated = _ui.value.routines.filter { it.id != id }
+        RoutinesStore.save(getApplication(), updated)
+        _ui.update { it.copy(routines = updated) }
+    }
+
+    fun routinesToggle(id: String, enabled: Boolean) {
+        val updated = _ui.value.routines.map { if (it.id == id) it.copy(enabled = enabled) else it }
+        RoutinesStore.save(getApplication(), updated)
+        _ui.update { it.copy(routines = updated) }
     }
 
     // ------------------------------------------------------------------

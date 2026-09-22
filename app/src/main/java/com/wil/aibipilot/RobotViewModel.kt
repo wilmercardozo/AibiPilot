@@ -52,11 +52,15 @@ data class LightItem(val id: Int, val name: String?)
 
 data class ChatMsg(val role: String, val content: String)
 
+enum class LogCat { TX, RX, EVT, ERR, SYS }
+
+data class LogLine(val cat: LogCat, val text: String)
+
 data class UiState(
     val conn: ConnState = ConnState.DISCONNECTED,
     val devices: List<ScanDevice> = emptyList(),
     val info: RobotInfo = RobotInfo(),
-    val log: List<String> = emptyList(),
+    val log: List<LogLine> = emptyList(),
     val volume: String = "high",
     val alarms: List<AlarmItem> = emptyList(),
     val lights: List<LightItem> = emptyList(),
@@ -199,11 +203,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private fun onBleEvent(event: BleEvent) {
         when (event) {
             is BleEvent.JsonMessage -> {
-                log("RX ${event.json}")
+                log(LogCat.RX, "RX ${event.json}")
                 parseResponse(event.json)
             }
             is BleEvent.RawMessage -> {
-                log("RX binario: ${event.bytes.toHex()}")
+                log(LogCat.RX, "RX binario: ${event.bytes.toHex().take(64)}")
             }
         }
     }
@@ -216,7 +220,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 "sta_rsp" -> parseStaRsp(root)
             "aibi_event" -> {
                 val eventName = root["data"]?.jsonObject?.get("event")?.jsonPrimitive?.contentOrNull
-                log("Evento robot: $eventName")
+                log(LogCat.EVT, "Evento robot: $eventName")
                 if (eventName == "modeout") {
                     currentMode = null
                     log("El robot salió del modo de función")
@@ -498,17 +502,19 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 ble.write(bytes)
-                log("TX $label [${bytes.size} bytes] ${bytes.toHex()}")
+                log(LogCat.TX, "TX $label [${bytes.size} bytes]")
             } catch (e: Exception) {
-                log("Error enviando $label: ${e.message}")
+                log(LogCat.ERR, "Error enviando $label: ${e.message}")
             }
         }
     }
 
-    private fun log(line: String) {
+    private fun log(line: String) = log(LogCat.SYS, line)
+
+    private fun log(cat: LogCat, line: String) {
         _ui.update { s ->
             val maxLines = 200
-            s.copy(log = (s.log + line).takeLast(maxLines))
+            s.copy(log = (s.log + LogLine(cat, line)).takeLast(maxLines))
         }
     }
 

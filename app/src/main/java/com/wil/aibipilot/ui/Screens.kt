@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessAlarm
@@ -81,6 +82,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.wil.aibipilot.ConnState
+import com.wil.aibipilot.LogCat
 import com.wil.aibipilot.RobotViewModel
 import com.wil.aibipilot.UiState
 import com.wil.aibipilot.protocol.Animations
@@ -743,23 +745,50 @@ private fun AnimationsTab(vm: RobotViewModel) {
 
 @Composable
 private fun LogTab(vm: RobotViewModel, ui: UiState) {
+    var filter by remember { mutableStateOf<LogCat?>(null) }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Tráfico BLE", style = MaterialTheme.typography.titleMedium)
             TextButton(onClick = { vm.clearLog() }) { Text("Limpiar") }
         }
+        Row(Modifier.horizontalScroll(rememberScrollState())) {
+            FilterChip(
+                selected = filter == null,
+                onClick = { filter = null },
+                label = { Text("Todos") },
+                modifier = Modifier.padding(end = 6.dp)
+            )
+            LogCat.entries.forEach { cat ->
+                FilterChip(
+                    selected = filter == cat,
+                    onClick = { filter = cat },
+                    label = { Text(cat.name) },
+                    modifier = Modifier.padding(end = 6.dp)
+                )
+            }
+        }
         HorizontalDivider()
-        val listState = androidx.compose.foundation.lazy.LazyListState()
-        LaunchedEffect(ui.log.size) {
-            if (ui.log.isNotEmpty()) listState.animateScrollToItem(ui.log.size - 1)
+        val listState = rememberLazyListState()
+        val visible = remember(ui.log, filter) {
+            ui.log.filter { filter == null || it.cat == filter }
+        }
+        LaunchedEffect(visible.size) {
+            if (visible.isNotEmpty()) listState.animateScrollToItem(visible.size - 1)
         }
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize()
         ) {
-            items(ui.log) { line ->
+            items(visible) { line ->
                 Text(
-                    line,
+                    "${line.cat.name} ${line.text}",
+                    color = when (line.cat) {
+                        LogCat.ERR -> Color(0xFFD32F2F)
+                        LogCat.TX -> Color(0xFF1976D2)
+                        LogCat.RX -> Color(0xFF2E7D32)
+                        LogCat.EVT -> Color(0xFFF57C00)
+                        LogCat.SYS -> Color(0xFF757575)
+                    },
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     lineHeight = 15.sp,

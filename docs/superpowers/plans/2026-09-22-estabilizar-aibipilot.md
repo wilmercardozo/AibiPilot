@@ -84,7 +84,7 @@ private fun log(cat: LogCat, line: String) {
 ```
 
 Después, estos cambios puntuales:
-- En `send()` (línea 501): `log("TX $label [${bytes.size} bytes] ${bytes.toHex()}")` → `log(LogCat.TX, "TX $label [${bytes.size} bytes]")` (el hex completo queda solo en logcat `Log.d("AibiBle", ...)`, línea 497).
+- En `send()` (línea 501): `log("TX $label [${bytes.size} bytes] ${bytes.toHex()}")` → `log(LogCat.TX, "TX $label [${bytes.size} bytes]")`; y `android.util.Log.d("AibiBle", "TX $label")` (línea 497) → `android.util.Log.d("AibiBle", "TX $label [${bytes.size} bytes] ${bytes.toHex()}")` (el hex completo debe seguir disponible en logcat).
 - En `onBleEvent` JsonMessage (línea 202): `log("RX ${event.json}")` → `log(LogCat.RX, "RX ${event.json}")`.
 - En `onBleEvent` RawMessage (línea 206): `log("RX binario: ${event.bytes.toHex()}")` → `log(LogCat.RX, "RX binario: ${event.bytes.toHex().take(64)}")`.
 - En `parseResponse` aibi_event (línea 219): `log("Evento robot: $eventName")` → `log(LogCat.EVT, "Evento robot: $eventName")`.

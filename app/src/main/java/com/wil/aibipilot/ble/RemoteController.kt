@@ -63,8 +63,8 @@ class RemoteController(private val context: Context) {
     val state: StateFlow<RemoteState> = _state.asStateFlow()
 
     private val requestMutex = Mutex()
-    private var pending: CompletableDeferred<String>? = null
-    private var alarmsPending: CompletableDeferred<List<AlarmItem>>? = null
+    @Volatile private var pending: CompletableDeferred<String>? = null
+    @Volatile private var alarmsPending: CompletableDeferred<List<AlarmItem>>? = null
     private var alarmsCache: List<AlarmItem> = emptyList()
 
     private val modeAckFlow = MutableSharedFlow<String>(extraBufferCapacity = 16)
@@ -102,12 +102,18 @@ class RemoteController(private val context: Context) {
         reconnectJob?.cancel()
         keepAliveJob?.cancel()
         currentMode = null
+        val oldPending = pending
+        val oldAlarmsPending = alarmsPending
         scope.launch {
             requestMutex.withLock {
-                pending?.completeExceptionally(IllegalStateException("desconectado"))
-                pending = null
-                alarmsPending?.completeExceptionally(IllegalStateException("desconectado"))
-                alarmsPending = null
+                if (oldPending != null && pending === oldPending) {
+                    oldPending.completeExceptionally(IllegalStateException("desconectado"))
+                    pending = null
+                }
+                if (oldAlarmsPending != null && alarmsPending === oldAlarmsPending) {
+                    oldAlarmsPending.completeExceptionally(IllegalStateException("desconectado"))
+                    alarmsPending = null
+                }
             }
         }
         _state.update { it.copy(conn = ConnState.DISCONNECTED, currentMode = null, info = RobotInfo()) }
@@ -160,31 +166,33 @@ class RemoteController(private val context: Context) {
 
     suspend fun alarmsList(): List<AlarmItem> {
         if (_state.value.conn != ConnState.CONNECTED) return alarmsCache
-        return requestMutex.withLock {
-            val deferred = CompletableDeferred<List<AlarmItem>>()
-            alarmsPending = deferred
-            lastTxAt = SystemClock.elapsedRealtime()
-            val payload = Protocol.alarmList()
-            Log.d(TAG, "TX ${payload.toHex()}")
-            try {
-                ble.write(payload)
-            } catch (e: Exception) {
-                if (alarmsPending === deferred) alarmsPending = null
-                Log.e(TAG, "alarm list write error: ${e.message}")
-                return@withLock alarmsCache
-            }
-            val result = withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
-                try {
-                    deferred.await()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    alarmsCache
-                }
-            } ?: alarmsCache
+        return withMode("alarm") { alarmsListNoLock() }
+    }
+
+    private suspend fun alarmsListNoLock(): List<AlarmItem> {
+        val deferred = CompletableDeferred<List<AlarmItem>>()
+        alarmsPending = deferred
+        lastTxAt = SystemClock.elapsedRealtime()
+        val payload = Protocol.alarmList()
+        Log.d(TAG, "TX ${payload.toHex()}")
+        try {
+            ble.write(payload)
+        } catch (e: Exception) {
             if (alarmsPending === deferred) alarmsPending = null
-            result
+            Log.e(TAG, "alarm list write error: ${e.message}")
+            return alarmsCache
         }
+        val result = withTimeoutOrNull(REQUEST_TIMEOUT_MS) {
+            try {
+                deferred.await()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                alarmsCache
+            }
+        } ?: alarmsCache
+        if (alarmsPending === deferred) alarmsPending = null
+        return result
     }
 
     suspend fun alarmAdd(tag: Int, time: String): Result<Unit> {
@@ -529,10 +537,10 @@ class RemoteController(private val context: Context) {
         }
     }
 
-    private suspend fun withMode(
+    private suspend fun <T> withMode(
         mode: String,
-        action: suspend () -> Result<Unit>
-    ): Result<Unit> = requestMutex.withLock {
+        action: suspend () -> T
+    ): T = requestMutex.withLock {
         if (currentMode != mode) {
             currentMode = mode
             _state.update { it.copy(currentMode = mode) }

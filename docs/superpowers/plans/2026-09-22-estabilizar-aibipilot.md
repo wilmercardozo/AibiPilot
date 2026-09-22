@@ -434,6 +434,7 @@ private var reconnectJob: kotlinx.coroutines.Job? = null
 private var keepAliveJob: kotlinx.coroutines.Job? = null
 private var reconnectAttempt = 0
 private var reconnectCancelled = false
+private var reconnectInFlight = false
 private var lastRxAt = 0L
 private var lastTxAt = 0L
 
@@ -469,53 +470,67 @@ Y en `send()` (líneas 496-506) agregar `lastTxAt = android.os.SystemClock.elaps
 
 - [ ] **Step 4: Lógica de reconexión y diagnóstico en `connectDevice`**
 
-En `connectDevice` (línea 153), al inicio (antes de `ble.connect`), resetear:
+Cambiar la firma de `connectDevice` a `private fun connectDevice(device: android.bluetooth.BluetoothDevice, deviceName: String?, isReconnect: Boolean = false)`.
+
+Al inicio de `connectDevice` (antes de `ble.connect`), reemplazar los resets por (solo se resetean si es un connect de usuario, no de la máquina de reconexión):
 
 ```kotlin
-reconnectCancelled = false
-reconnectAttempt = 0
-reconnectJob?.cancel()
-_ui.update { it.copy(reconnectAttempt = 0, connHint = null) }
+if (!isReconnect) {
+    reconnectCancelled = false
+    reconnectAttempt = 0
+    reconnectJob?.cancel()
+    _ui.update { it.copy(reconnectAttempt = 0, connHint = null) }
+}
 ```
 
 En el callback `onState`:
-- En la rama `connected`: después de `log("Conectado. MTU: ...")` agregar `startKeepAlive()`.
-- Reemplazar la rama `else` (líneas 176-180) por:
+- En la rama `connected`: agregar `reconnectInFlight = false` y `reconnectAttempt = 0`, y después de `log("Conectado. MTU: ...")` agregar `startKeepAlive()`.
+- Reemplazar la rama `else` por:
 
 ```kotlin
 } else {
-    if (reconnectCancelled || _ui.value.conn == ConnState.CONNECTING) {
+    if (reconnectCancelled) {
         _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
         log(LogCat.SYS, "Se perdió la conexión BLE")
-    } else {
+    } else if (reconnectInFlight) {
         scheduleReconnect()
+    } else {
+        _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
+        log(LogCat.SYS, "Se perdió la conexión BLE")
     }
 }
 ```
 
-Y reemplazar el timeout de 12s (líneas 184-191) por:
+Y reemplazar el timeout de 12s por:
 
 ```kotlin
 viewModelScope.launch {
     kotlinx.coroutines.delay(12000)
     if (_ui.value.conn == ConnState.CONNECTING) {
         ble.disconnect()
-        _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
-        log(LogCat.ERR, "Timeout de conexión")
-        diagnoseConnectFailure(device.address)
+        if (reconnectInFlight) {
+            scheduleReconnect()
+        } else {
+            _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
+            log(LogCat.ERR, "Timeout de conexión")
+            diagnoseConnectFailure(device.address)
+        }
     }
 }
 ```
 
 - [ ] **Step 5: Implementar `scheduleReconnect`, `diagnoseConnectFailure` y `startKeepAlive`**
 
-Agregar estos métodos (junto a `connectDevice`):
+Agregar estos métodos (junto a `connectDevice`). `reconnectInFlight` marca el ciclo de
+reconexión: sin esto, `connectDevice` resetea `reconnectAttempt` y la rama `else` de
+`onState` (conn==CONNECTING) mata el ciclo tras el primer intento:
 
 ```kotlin
 private fun scheduleReconnect() {
     reconnectJob?.cancel()
     reconnectAttempt++
     if (reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
+        reconnectInFlight = false
         _ui.update {
             it.copy(
                 conn = ConnState.DISCONNECTED,
@@ -524,8 +539,10 @@ private fun scheduleReconnect() {
             )
         }
         log(LogCat.ERR, "Reconexión agotada tras $MAX_RECONNECT_ATTEMPTS intentos")
+        diagnoseConnectFailure(prefs().getString(KEY_MAC, null) ?: return)
         return
     }
+    reconnectInFlight = true
     val delayMs = reconnectBackoff[minOf(reconnectAttempt - 1, reconnectBackoff.size - 1)]
     _ui.update { it.copy(conn = ConnState.RECONNECTING, reconnectAttempt = reconnectAttempt) }
     log(LogCat.SYS, "Reconexión automática: intento $reconnectAttempt en ${delayMs / 1000}s")
@@ -541,7 +558,7 @@ private fun scheduleReconnect() {
                 .getSystemService(android.content.Context.BLUETOOTH_SERVICE)
                 as android.bluetooth.BluetoothManager
             val device = btManager.adapter.getRemoteDevice(mac)
-            connectDevice(device, prefs().getString(KEY_NAME, null))
+            connectDevice(device, prefs().getString(KEY_NAME, null), isReconnect = true)
         } catch (e: Exception) {
             _ui.update { it.copy(conn = ConnState.DISCONNECTED, reconnectAttempt = 0) }
             log(LogCat.ERR, "Reconexión fallida: ${e.message}")
@@ -583,7 +600,7 @@ private fun diagnoseConnectFailure(mac: String) {
 private fun startKeepAlive() {
     keepAliveJob?.cancel()
     keepAliveJob = viewModelScope.launch {
-        while (kotlinx.coroutines.isActive) {
+        while (isActive) {
             kotlinx.coroutines.delay(5000)
             val now = android.os.SystemClock.elapsedRealtime()
             val idle = now - lastRxAt > 20000 && now - lastTxAt > 20000
@@ -606,7 +623,7 @@ private fun startKeepAlive() {
 }
 ```
 
-Nota: `rxEvents.filter { lastRxAt > pingAt }.first()` — `lastRxAt` es un `Long` var leído en cada emisión; al haber RX nuevo, `onBleEvent` actualiza `lastRxAt` antes del `tryEmit`, así que el filtro pasa.
+Nota: `rxEvents.filter { lastRxAt > pingAt }.first()` — `lastRxAt` es un `Long` var leído en cada emisión; al haber RX nuevo, `onBleEvent` actualiza `lastRxAt` antes del `tryEmit`, así que el filtro pasa. Requiere `import kotlinx.coroutines.isActive` (property de extensión: no usar el nombre completo de paquete, no compila).
 
 - [ ] **Step 6: Cancelar jobs y resetear en `disconnect()`; reanudar al volver a primer plano**
 
@@ -627,6 +644,7 @@ Reemplazar `disconnect()` (líneas 487-494) por:
 ```kotlin
 fun disconnect() {
     reconnectCancelled = true
+    reconnectInFlight = false
     reconnectJob?.cancel()
     keepAliveJob?.cancel()
     currentMode = null

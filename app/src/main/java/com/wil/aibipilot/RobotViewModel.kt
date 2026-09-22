@@ -734,6 +734,48 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             .apply()
     }
 
+    /**
+     * Prueba la conexión con el endpoint LLM: POST mínimo OpenAI-compatible
+     * con un único mensaje "ping" y timeout de 15s. El callback se invoca en
+     * el hilo principal con (ok, mensaje legible).
+     */
+    fun testLlmConnection(cfg: LlmConfig, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val client = okhttp3.OkHttpClient.Builder()
+                .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            val result: Pair<Boolean, String> = try {
+                val body = buildJsonObject {
+                    put("model", cfg.model)
+                    put("messages", JsonArray(listOf(buildJsonObject {
+                        put("role", "user")
+                        put("content", "ping")
+                    })))
+                }.toString()
+                val request = okhttp3.Request.Builder()
+                    .url(cfg.baseUrl)
+                    .header("Authorization", "Bearer ${cfg.apiKey}")
+                    .header("Content-Type", "application/json")
+                    .post(body.toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(request).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        true to "Conexión OK"
+                    } else {
+                        false to "HTTP ${resp.code}: ${resp.message}"
+                    }
+                }
+            } catch (e: Exception) {
+                false to (e.message ?: e.javaClass.simpleName)
+            }
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                onResult(result.first, result.second)
+            }
+        }
+    }
+
     fun sendChatMessage(text: String) {
         if (text.isBlank() || _ui.value.chatThinking) return
         val userMsg = ChatMsg("user", text.trim())

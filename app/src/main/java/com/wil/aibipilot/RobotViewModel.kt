@@ -93,6 +93,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private var reconnectAttempt = 0
     private var reconnectCancelled = false
     private var reconnectInFlight = false
+    private var connectTimeoutJob: kotlinx.coroutines.Job? = null
     private var lastRxAt = 0L
     private var lastTxAt = 0L
 
@@ -183,6 +184,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         log("Conectando a ${deviceName ?: "(sin nombre)"} (${device.address})")
         if (!isReconnect) {
             reconnectCancelled = false
+            reconnectInFlight = false
             reconnectAttempt = 0
             reconnectJob?.cancel()
             _ui.update { it.copy(reconnectAttempt = 0, connHint = null) }
@@ -198,6 +200,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                         .putString(KEY_NAME, device.name ?: deviceName)
                         .apply()
                     reconnectInFlight = false
+                    connectTimeoutJob?.cancel()
                     reconnectAttempt = 0
                     _ui.update { it.copy(conn = ConnState.CONNECTED) }
                     log("Conectado. MTU: ${ble.currentMtu()}")
@@ -210,17 +213,21 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                     if (reconnectCancelled) {
                         _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
                         log(LogCat.SYS, "Se perdió la conexión BLE")
-                    } else if (reconnectInFlight) {
+                    } else if (reconnectInFlight || _ui.value.conn == ConnState.CONNECTED) {
                         scheduleReconnect()
                     } else {
+                        // fallo de un connect de usuario (conn == CONNECTING)
+                        connectTimeoutJob?.cancel()
                         _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
-                        log(LogCat.SYS, "Se perdió la conexión BLE")
+                        log(LogCat.ERR, "No se pudo conectar")
+                        diagnoseConnectFailure(device.address)
                     }
                 }
             }
         )
         // Timeout de conexión: si en 12s no conecta, volver al escaneo
-        viewModelScope.launch {
+        connectTimeoutJob?.cancel()
+        connectTimeoutJob = viewModelScope.launch {
             kotlinx.coroutines.delay(12000)
             if (_ui.value.conn == ConnState.CONNECTING) {
                 ble.disconnect()
@@ -323,8 +330,10 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                     } ?: false
                     if (!responded) {
                         log(LogCat.ERR, "El robot no responde al ping: forzando reconexión")
+                        // flag primero: el onState(false) del disconnect dispara
+                        // scheduleReconnect UNA sola vez (sin doble incremento)
+                        reconnectInFlight = true
                         ble.disconnect()
-                        scheduleReconnect()
                     }
                 }
             }

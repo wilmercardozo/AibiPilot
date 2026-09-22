@@ -14,12 +14,16 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.wil.aibipilot.MainActivity
+import com.wil.aibipilot.routines.Routine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 
 /**
  * Estado compartido del modo remoto (proceso): el servicio lo enciende/apaga
@@ -42,6 +46,8 @@ class RemoteService : Service() {
         const val CHANNEL_ID = "remote_mode"
         const val NOTIFICATION_ID = 1001
         const val ACTION_STOP = "com.wil.aibipilot.action.STOP_REMOTE"
+        const val ACTION_RUN_ROUTINES = "com.wil.aibipilot.action.RUN_ROUTINES"
+        const val EXTRA_ROUTINES_JSON = "routines_json"
         private const val PREFS = "aibi_pilot_prefs"
         private const val KEY_MAC = "last_device_mac"
         private const val KEY_NAME = "last_device_name"
@@ -67,10 +73,21 @@ class RemoteService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            Log.d(TAG, "acción Parar recibida")
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                Log.d(TAG, "acción Parar recibida")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_RUN_ROUTINES -> {
+                startAsForeground()
+                if (!started) {
+                    started = true
+                    startEngine()
+                }
+                runRoutines(intent.getStringExtra(EXTRA_ROUTINES_JSON))
+                return START_NOT_STICKY
+            }
         }
         startAsForeground()
         if (!started) {
@@ -189,6 +206,41 @@ class RemoteService : Service() {
             )
             this.server = server
             server.start(port)
+        }
+    }
+
+    /**
+     * Ejecuta rutinas debidas (spec C3) con el RemoteController del servicio,
+     * mapeando RoutineAction → speak/play/scene/lightOn/lightOff. Las rutinas
+     * llegan serializadas en el extra JSON de ACTION_RUN_ROUTINES (RoutineWorker).
+     */
+    private fun runRoutines(json: String?) {
+        if (json.isNullOrBlank()) return
+        val routines = try {
+            Json.decodeFromString<List<Routine>>(json)
+        } catch (e: Exception) {
+            Log.e(TAG, "runRoutines: JSON inválido: ${e.message}")
+            return
+        }
+        if (routines.isEmpty()) return
+        Log.d(TAG, "ejecutando ${routines.size} rutina(s) debida(s)")
+        scope.launch {
+            val c = controller
+            if (c == null) {
+                Log.w(TAG, "sin RemoteController: no se pueden ejecutar rutinas")
+                return@launch
+            }
+            routines.forEach { r ->
+                Log.d(TAG, "rutina: ${r.time} ${r.action.type}")
+                when (r.action.type) {
+                    "speak" -> c.speak(r.action.payload)
+                    "animation" -> c.play(r.action.payload)
+                    "scene" -> c.scene(r.action.payload)
+                    "light" -> if (r.action.payload == "on") c.lightOn(0) else c.lightOff(0)
+                    else -> Log.w(TAG, "acción de rutina desconocida: ${r.action.type}")
+                }
+                delay(1500)
+            }
         }
     }
 

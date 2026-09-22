@@ -13,6 +13,7 @@ import com.wil.aibipilot.ble.RemoteStateBus
 import com.wil.aibipilot.ble.ScanDevice
 import com.wil.aibipilot.protocol.Protocol
 import com.wil.aibipilot.routines.Routine
+import com.wil.aibipilot.routines.RoutineScheduler
 import com.wil.aibipilot.routines.RoutinesStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filter
@@ -71,6 +72,67 @@ fun batteryLabel(level: Int?): String = when (level) {
     else -> "—"
 }
 
+/**
+ * Notificaciones de la app (spec C3): canal único "aibi" para rutinas
+ * pendientes, batería baja y desconexión prolongada. Requiere el permiso
+ * POST_NOTIFICATIONS en Android 13+; sin él, notify() no hace nada.
+ */
+object AibiNotifier {
+
+    const val CHANNEL_ID = "aibi"
+
+    fun hasPermission(context: android.content.Context): Boolean =
+        android.os.Build.VERSION.SDK_INT < 33 ||
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.POST_NOTIFICATIONS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    fun ensureChannel(context: android.content.Context) {
+        val manager = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE)
+            as android.app.NotificationManager
+        manager.createNotificationChannel(
+            android.app.NotificationChannel(
+                CHANNEL_ID,
+                "Avisos",
+                android.app.NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Rutinas pendientes, batería baja y desconexión del robot"
+            }
+        )
+    }
+
+    fun mainIntent(context: android.content.Context): android.app.PendingIntent =
+        android.app.PendingIntent.getActivity(
+            context,
+            0,
+            android.content.Intent(context, MainActivity::class.java),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+    fun notify(
+        context: android.content.Context,
+        id: Int,
+        title: String,
+        text: String,
+        contentIntent: android.app.PendingIntent? = null
+    ) {
+        if (!hasPermission(context)) return
+        ensureChannel(context)
+        val builder = androidx.core.app.NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(com.wil.aibipilot.R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent ?: mainIntent(context))
+        try {
+            androidx.core.app.NotificationManagerCompat.from(context).notify(id, builder.build())
+        } catch (e: Exception) {
+            android.util.Log.e("AibiNotifier", "error notificando: ${e.message}")
+        }
+    }
+}
+
 const val DEFAULT_LLM_PROMPT = "Eres AIBI, una mascota robot adorable y pequeña con gran personalidad. " +
     "Respondes en español, de forma breve (máximo 2 frases), cálida y con humor. " +
     "Te gusta jugar, animar a tu dueño y hacer bromas tiernas."
@@ -113,6 +175,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     init {
         loadThemeMode()
         _ui.update { it.copy(routines = RoutinesStore.load(getApplication())) }
+        RoutineScheduler.schedule(getApplication())
         viewModelScope.launch {
             RemoteStateBus.running.collect { running ->
                 _ui.update { it.copy(remoteRunning = running) }
@@ -133,6 +196,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private var connectTimeoutJob: kotlinx.coroutines.Job? = null
     private var lastRxAt = 0L
     private var lastTxAt = 0L
+    private var lowBatteryNotified = false
 
     private val rxEvents = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
         extraBufferCapacity = 64
@@ -168,18 +232,21 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             .sortedBy { it.time }
         RoutinesStore.save(getApplication(), updated)
         _ui.update { it.copy(routines = updated) }
+        RoutineScheduler.schedule(getApplication())
     }
 
     fun routinesDelete(id: String) {
         val updated = _ui.value.routines.filter { it.id != id }
         RoutinesStore.save(getApplication(), updated)
         _ui.update { it.copy(routines = updated) }
+        RoutineScheduler.schedule(getApplication())
     }
 
     fun routinesToggle(id: String, enabled: Boolean) {
         val updated = _ui.value.routines.map { if (it.id == id) it.copy(enabled = enabled) else it }
         RoutinesStore.save(getApplication(), updated)
         _ui.update { it.copy(routines = updated) }
+        RoutineScheduler.schedule(getApplication())
     }
 
     // ------------------------------------------------------------------
@@ -393,6 +460,13 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             log(LogCat.ERR, "Reconexión agotada tras $MAX_RECONNECT_ATTEMPTS intentos")
+            AibiNotifier.notify(
+                getApplication(),
+                3002,
+                "No se pudo reconectar",
+                "El robot no responde. ¿Está dormido o apagado?",
+                AibiNotifier.mainIntent(getApplication())
+            )
             diagnoseConnectFailure(prefs().getString(KEY_MAC, null) ?: return)
             return
         }
@@ -598,8 +672,33 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 )
             }
+            // cubre también el sta query[12] del keep-alive (pasa por acá)
+            notifyLowBatteryIfNeeded()
         } else if (result != null) {
             log("Respuesta: $result")
+        }
+    }
+
+    /**
+     * Batería baja (spec C3): notifica una sola vez cuando el nivel es 1 y
+     * re-arma el flag cuando vuelve a subir de nivel.
+     */
+    private fun notifyLowBatteryIfNeeded() {
+        val level = _ui.value.info.battery ?: return
+        if (level == 1) {
+            if (!lowBatteryNotified) {
+                lowBatteryNotified = true
+                AibiNotifier.notify(
+                    getApplication(),
+                    3001,
+                    "Batería baja",
+                    "Cargá al robot",
+                    AibiNotifier.mainIntent(getApplication())
+                )
+                log(LogCat.EVT, "Notificación: batería baja")
+            }
+        } else if (level > 1) {
+            lowBatteryNotified = false
         }
     }
 
@@ -1015,6 +1114,57 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                     ensureMode("light") { send(Protocol.lightOff(0), "Escena: luz off") }
                 }
             }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Rutina pendiente (spec C3): la notificación del worker abre la app
+    // con run_routine_id; se conecta con la máquina normal y ejecuta la
+    // acción por el mismo camino que la UI (ensureMode + send / playScene).
+    // ------------------------------------------------------------------
+    fun runPendingRoutine(id: String) {
+        val routine = RoutinesStore.load(getApplication()).firstOrNull { it.id == id }
+        if (routine == null) {
+            showSnackbar("Rutina no encontrada")
+            return
+        }
+        log("Rutina pendiente: ${routine.time} (${routine.action.type})")
+        viewModelScope.launch {
+            if (_ui.value.conn != ConnState.CONNECTED) {
+                if (!tryAutoReconnect()) {
+                    showSnackbar("No se pudo ejecutar la rutina: robot no disponible")
+                    return@launch
+                }
+                val connected = kotlinx.coroutines.withTimeoutOrNull(20000) {
+                    ui.filter { it.conn == ConnState.CONNECTED }.first()
+                } != null
+                if (!connected) {
+                    showSnackbar("No se pudo ejecutar la rutina: robot no conectado")
+                    return@launch
+                }
+            }
+            executeRoutine(routine)
+            showSnackbar("Rutina ejecutada")
+        }
+    }
+
+    private suspend fun executeRoutine(routine: Routine) {
+        when (routine.action.type) {
+            "speak" -> ensureMode("show") {
+                send(Protocol.showSpeak(routine.action.payload.take(400)), "Rutina: hablar")
+            }
+            "animation" -> ensureMode("show") {
+                send(Protocol.showPlay(routine.action.payload), "Rutina: animación")
+            }
+            "scene" -> playScene(routine.action.payload)
+            "light" -> ensureMode("light") {
+                if (routine.action.payload == "on") {
+                    send(Protocol.lightOn(0), "Rutina: luz on")
+                } else {
+                    send(Protocol.lightOff(0), "Rutina: luz off")
+                }
+            }
+            else -> log(LogCat.ERR, "Acción de rutina desconocida: ${routine.action.type}")
         }
     }
 

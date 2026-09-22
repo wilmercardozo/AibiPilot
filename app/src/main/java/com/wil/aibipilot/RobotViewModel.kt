@@ -70,7 +70,8 @@ data class UiState(
     val photoServerRunning: Boolean = false,
     val photos: List<String> = emptyList(),
     val chat: List<ChatMsg> = emptyList(),
-    val chatThinking: Boolean = false
+    val chatThinking: Boolean = false,
+    val themeMode: String = "system"
 )
 
 class RobotViewModel(app: Application) : AndroidViewModel(app) {
@@ -79,11 +80,16 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         private const val PREFS = "aibi_pilot_prefs"
         private const val KEY_MAC = "last_device_mac"
         private const val KEY_NAME = "last_device_name"
+        private const val KEY_THEME_MODE = "theme_mode"
     }
 
     val ble = BleClient(app)
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
+
+    init {
+        loadThemeMode()
+    }
 
     private var currentDevice: android.bluetooth.BluetoothDevice? = null
     private var scanJob: kotlinx.coroutines.Job? = null
@@ -112,6 +118,16 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         getApplication<Application>().getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
 
     fun savedDeviceName(): String? = prefs().getString(KEY_NAME, null)
+
+    fun setThemeMode(mode: String) {
+        _ui.update { it.copy(themeMode = mode) }
+        prefs().edit().putString(KEY_THEME_MODE, mode).apply()
+    }
+
+    fun loadThemeMode() {
+        val mode = prefs().getString(KEY_THEME_MODE, "system") ?: "system"
+        _ui.update { it.copy(themeMode = mode) }
+    }
 
     private val photoDir: java.io.File
         get() = java.io.File(getApplication<Application>().getExternalFilesDir(null), "photos")

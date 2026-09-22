@@ -46,7 +46,7 @@ class RemoteController(private val context: Context) {
 
     companion object {
         private const val TAG = "AibiRemote"
-        private const val REQUEST_TIMEOUT_MS = 8000L
+        private const val REQUEST_TIMEOUT_MS = 15000L
         private const val RAW_TIMEOUT_MS = 6000L
         private const val MODE_ACK_TIMEOUT_MS = 4000L
         private const val MODE_FALLBACK_MS = 700L

@@ -432,6 +432,7 @@ Junto a `scanJob` (línea 82), agregar:
 ```kotlin
 private var reconnectJob: kotlinx.coroutines.Job? = null
 private var keepAliveJob: kotlinx.coroutines.Job? = null
+private var connectTimeoutJob: kotlinx.coroutines.Job? = null
 private var reconnectAttempt = 0
 private var reconnectCancelled = false
 private var reconnectInFlight = false
@@ -478,33 +479,40 @@ Al inicio de `connectDevice` (antes de `ble.connect`), reemplazar los resets por
 if (!isReconnect) {
     reconnectCancelled = false
     reconnectAttempt = 0
+    reconnectInFlight = false
     reconnectJob?.cancel()
     _ui.update { it.copy(reconnectAttempt = 0, connHint = null) }
 }
 ```
 
 En el callback `onState`:
-- En la rama `connected`: agregar `reconnectInFlight = false` y `reconnectAttempt = 0`, y después de `log("Conectado. MTU: ...")` agregar `startKeepAlive()`.
-- Reemplazar la rama `else` por:
+- En la rama `connected`: agregar `connectTimeoutJob?.cancel()`, `reconnectInFlight = false` y `reconnectAttempt = 0`, y después de `log("Conectado. MTU: ...")` agregar `startKeepAlive()`.
+- Reemplazar la rama `else` por (la desconexión de una conexión VIVA arranca el ciclo:
+  `conn == CONNECTED` o `reconnectInFlight`):
 
 ```kotlin
 } else {
     if (reconnectCancelled) {
         _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
         log(LogCat.SYS, "Se perdió la conexión BLE")
-    } else if (reconnectInFlight) {
+    } else if (reconnectInFlight || _ui.value.conn == ConnState.CONNECTED) {
         scheduleReconnect()
     } else {
+        // fallo de un connect de usuario (conn == CONNECTING)
+        connectTimeoutJob?.cancel()
         _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
-        log(LogCat.SYS, "Se perdió la conexión BLE")
+        log(LogCat.ERR, "No se pudo conectar")
+        diagnoseConnectFailure(device.address)
     }
 }
 ```
 
-Y reemplazar el timeout de 12s por:
+Y reemplazar el timeout de 12s por (se guarda en `connectTimeoutJob` para poder
+cancelarlo: sin esto los timeouts viejos de intentos anteriores compiten):
 
 ```kotlin
-viewModelScope.launch {
+connectTimeoutJob?.cancel()
+connectTimeoutJob = viewModelScope.launch {
     kotlinx.coroutines.delay(12000)
     if (_ui.value.conn == ConnState.CONNECTING) {
         ble.disconnect()
@@ -612,11 +620,13 @@ private fun startKeepAlive() {
                     rxEvents.filter { lastRxAt > pingAt }.first()
                     true
                 } ?: false
-                if (!responded) {
-                    log(LogCat.ERR, "El robot no responde al ping: forzando reconexión")
-                    ble.disconnect()
-                    scheduleReconnect()
-                }
+                    if (!responded) {
+                        log(LogCat.ERR, "El robot no responde al ping: forzando reconexión")
+                        // flag primero: el onState(false) que llega del disconnect es
+                        // quien dispara scheduleReconnect UNA sola vez (sin doble incremento)
+                        reconnectInFlight = true
+                        ble.disconnect()
+                    }
             }
         }
     }

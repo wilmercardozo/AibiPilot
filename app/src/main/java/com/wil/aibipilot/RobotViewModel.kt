@@ -243,6 +243,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun scheduleReconnect() {
+        if (reconnectJob?.isActive == true) return // idempotente: ya hay un intento en curso
         reconnectJob?.cancel()
         reconnectAttempt++
         if (reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
@@ -330,10 +331,12 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                     } ?: false
                     if (!responded) {
                         log(LogCat.ERR, "El robot no responde al ping: forzando reconexión")
-                        // flag primero: el onState(false) del disconnect dispara
-                        // scheduleReconnect UNA sola vez (sin doble incremento)
+                        // MIUI puede no entregar el callback de disconnect: arrancar el
+                        // ciclo directamente; un onState(false) tardío se descarta por la
+                        // guarda de idempotencia de scheduleReconnect
                         reconnectInFlight = true
                         ble.disconnect()
+                        scheduleReconnect()
                     }
                 }
             }

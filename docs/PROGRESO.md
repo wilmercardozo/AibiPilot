@@ -38,3 +38,34 @@ Estado: **COMPLETO**. Todo verificado en vivo con el robot AIBI-CF6A salvo lo ap
 - WifiManager.connectionInfo.ipAddress devuelve 0 en MIUI → ConnectivityManager.
 - El robot responde `photo_sync_no` explícito si no tiene WiFi.
 - MIUI no entrega callback GATT al apagar el adaptador BT.
+
+## 2026-09-22 — Plan "rediseño UX" (subproyecto B)
+
+Estado: **COMPLETO**. Verificado en vivo con el robot salvo lo ambiental.
+
+### Resultado
+- Tema "Tech limpio" (oscuro por defecto + toggle Sistema/Claro/Oscuro, pixel-check en vivo).
+- Navegación: 5 destinos (Inicio, Chat IA, Hablar, Jugar, Herramientas) con rail en tablet y
+  bottom bar en teléfono; wizard de conexión (permisos → despertar → escanear + reconexión rápida).
+- Pantallas: dashboard con accesos rápidos y escenas, chat IA reestilizado con diálogo de
+  configuración (botón Probar + hint Ollama), TTS + animaciones agrupadas, juegos con controles,
+  Herramientas con sub-pestañas (Luces, Alarmas con selector de tag, Fotos, Log BLE).
+- Feedback: pill de estado en header, snackbars transitorios, diálogos graves, estados vacíos.
+- Pulido aparcado de A resuelto: selector de tag real (etiquetas del oficial), modeout filtrado
+  por modo actual, fallo síncrono de connectGatt fuera del job, diagnóstico único, soTimeout 30s.
+- `DESIGN.md` como fuente de diseño (entregado por rol ux con checkpoint del usuario).
+
+### En vivo con el robot
+- Baile `show_play_ok` · volumen ciclo · luz on · chess in/start · alarm add tag:2 + del con
+  ACKs · keep-alive vivo · tema claro/oscuro verificado con PIL. TTS dio `show_speak_no`
+  "Server disconnected" (servidor del robot, no de la app).
+
+### Aparcado (backlog C)
+- Transferencia real de fotos (pendiente WiFi del robot) · botón "Abrir" en galería (FileProvider).
+- Integración Hermes Agent (HTTP bridge + MCP) · rutinas, notificaciones, widget, consola raw,
+  sniffer, gamificación, editor de escenas, UI completa de juegos.
+
+### Costo del plan
+- ~10 despachos flash (dev/QA) + 2 pro (ux DESIGN.md + QA senior) en pestañas Herdr.
+- El checkpoint de DESIGN.md con el usuario evitó retrabajo; los QA flash siguieron rindiendo
+  (2 desvíos menores capturados y resueltos en T8).

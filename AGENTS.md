@@ -62,8 +62,23 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - `ble/BleClient.kt` — scan/connect/notify/write + reensamblado de frames
 - `ble/PhotoTcpServer.kt` — servidor TCP fotos (protocolo reconstruido del smali oficial)
 - `protocol/Protocol.kt` — builders de comandos + catálogo de animaciones
-- `RobotViewModel.kt` — estado, ensureMode (modos), chat LLM (OpenAI-compatible), escenas
-- `ui/Screens.kt` — Compose, layout adaptativo (NavigationRail >= 840dp), tabs, Chat IA
+- `RobotViewModel.kt` — estado, ensureMode (modos), chat LLM (OpenAI-compatible), escenas,
+  máquina de reconexión, keep-alive, snackbar, tema
+- `ui/Screens.kt` — scaffold: Destination enum (5 destinos), AibiPilotApp, ConnectedHeader
+- `ui/ConnectScreen.kt` — wizard de conexión (permisos → despertar → escanear + reconexión rápida)
+- `ui/HomeScreen.kt` (dashboard) · `ChatScreen.kt` · `TalkScreen.kt` · `GamesScreen.kt` ·
+  `ToolsScreen.kt` (Luces/Alarmas/Fotos/Log BLE)
+- `ui/theme/Theme.kt` (tema "Tech limpio" oscuro/claro/sistema) · `ui/components/Components.kt`
+- `DESIGN.md` — diseño del rediseño UX (sistema visual, pantallas, copy)
+
+## Datos del rediseño UX (subproyecto B, verificado en vivo 22 sep)
+- Tema: oscuro por defecto + toggle Sistema/Claro/Oscuro (diálogo Apariencia en el header)
+- Alarmas: selector de tag 0..6 con etiquetas reales del oficial: 0 Alarma, 1 Medicamento,
+  2 Agua, 3 Deporte, 4 Levantarse, 5 Comida, 6 Reunión
+- Verificación visual con adb: uiautomator dump para layout (mi modelo no lee imágenes);
+  pixel-check del tema con PIL (`adb exec-out screencap -p` + `Image.getpixel`)
+- Layout teléfono para pruebas: `adb shell wm density 400` (+ `wm size`), restaurar con
+  `adb shell wm density reset && adb shell wm size reset`
 
 ## Referencias de decompilación (persistidas en /tmp/aibi — se pierden al reiniciar)
 - `jadx_out/sources/ai/living/aibi/` — Java decompilado de la app oficial

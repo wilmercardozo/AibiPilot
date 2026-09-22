@@ -46,12 +46,16 @@ object RoutineScheduler {
         val today = now.dayOfWeek.value // 1=Lunes .. 7=Domingo
         val nowMin = now.hour * 60 + now.minute
         return RoutinesStore.load(ctx).filter { r ->
-            if (!r.enabled || today !in r.days) return@filter false
-            val parts = r.time.split(":").mapNotNull { it.toIntOrNull() }
+            if (!r.enabled) return@filter false
+            val parts = r.time.split(":")
             if (parts.size != 2) return@filter false
-            val routineMin = parts[0] * 60 + parts[1]
+            val routineMin = (parts[0].toIntOrNull() ?: return@filter false) * 60 +
+                (parts[1].toIntOrNull() ?: return@filter false)
             val diff = (nowMin - routineMin + 1440) % 1440
-            diff in 0..WINDOW_MINUTES
+            if (diff !in 0..WINDOW_MINUTES) return@filter false
+            val fireDay = if (diff <= nowMin) today else
+                if (today == 1) 7 else today - 1
+            fireDay in r.days
         }
     }
 }

@@ -535,6 +535,7 @@ reconexión: sin esto, `connectDevice` resetea `reconnectAttempt` y la rama `els
 
 ```kotlin
 private fun scheduleReconnect() {
+    if (reconnectJob?.isActive == true) return // idempotente: ya hay un intento en curso
     reconnectJob?.cancel()
     reconnectAttempt++
     if (reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
@@ -622,10 +623,12 @@ private fun startKeepAlive() {
                 } ?: false
                     if (!responded) {
                         log(LogCat.ERR, "El robot no responde al ping: forzando reconexión")
-                        // flag primero: el onState(false) que llega del disconnect es
-                        // quien dispara scheduleReconnect UNA sola vez (sin doble incremento)
+                        // MIUI puede no entregar el callback de disconnect (p. ej. adaptador
+                        // apagado): arrancar el ciclo directamente; el onState(false) que
+                        // llegue después se descarta por la guarda de idempotencia
                         reconnectInFlight = true
                         ble.disconnect()
+                        scheduleReconnect()
                     }
             }
         }

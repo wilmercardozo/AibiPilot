@@ -92,6 +92,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private var keepAliveJob: kotlinx.coroutines.Job? = null
     private var reconnectAttempt = 0
     private var reconnectCancelled = false
+    private var reconnectInFlight = false
     private var lastRxAt = 0L
     private var lastTxAt = 0L
 
@@ -173,17 +174,19 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun connectDevice(device: android.bluetooth.BluetoothDevice, deviceName: String?) {
+    private fun connectDevice(device: android.bluetooth.BluetoothDevice, deviceName: String?, isReconnect: Boolean = false) {
         android.util.Log.d("AibiBle", "VM.connect() called for ${device.address}")
         scanJob?.cancel()
         ble.stopScan()
         _ui.update { it.copy(conn = ConnState.CONNECTING, devices = emptyList()) }
         currentDevice = device
         log("Conectando a ${deviceName ?: "(sin nombre)"} (${device.address})")
-        reconnectCancelled = false
-        reconnectAttempt = 0
-        reconnectJob?.cancel()
-        _ui.update { it.copy(reconnectAttempt = 0, connHint = null) }
+        if (!isReconnect) {
+            reconnectCancelled = false
+            reconnectAttempt = 0
+            reconnectJob?.cancel()
+            _ui.update { it.copy(reconnectAttempt = 0, connHint = null) }
+        }
         ble.connect(
             device,
             onEvent = ::onBleEvent,
@@ -194,6 +197,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                         .putString(KEY_MAC, device.address)
                         .putString(KEY_NAME, device.name ?: deviceName)
                         .apply()
+                    reconnectInFlight = false
+                    reconnectAttempt = 0
                     _ui.update { it.copy(conn = ConnState.CONNECTED) }
                     log("Conectado. MTU: ${ble.currentMtu()}")
                     startKeepAlive()
@@ -202,11 +207,14 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                         handshake()
                     }
                 } else {
-                    if (reconnectCancelled || _ui.value.conn == ConnState.CONNECTING) {
+                    if (reconnectCancelled) {
                         _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
                         log(LogCat.SYS, "Se perdió la conexión BLE")
-                    } else {
+                    } else if (reconnectInFlight) {
                         scheduleReconnect()
+                    } else {
+                        _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
+                        log(LogCat.SYS, "Se perdió la conexión BLE")
                     }
                 }
             }
@@ -216,9 +224,13 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             kotlinx.coroutines.delay(12000)
             if (_ui.value.conn == ConnState.CONNECTING) {
                 ble.disconnect()
-                _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
-                log(LogCat.ERR, "Timeout de conexión")
-                diagnoseConnectFailure(device.address)
+                if (reconnectInFlight) {
+                    scheduleReconnect()
+                } else {
+                    _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
+                    log(LogCat.ERR, "Timeout de conexión")
+                    diagnoseConnectFailure(device.address)
+                }
             }
         }
     }
@@ -227,6 +239,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         reconnectJob?.cancel()
         reconnectAttempt++
         if (reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
+            reconnectInFlight = false
             _ui.update {
                 it.copy(
                     conn = ConnState.DISCONNECTED,
@@ -235,8 +248,10 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             log(LogCat.ERR, "Reconexión agotada tras $MAX_RECONNECT_ATTEMPTS intentos")
+            diagnoseConnectFailure(prefs().getString(KEY_MAC, null) ?: return)
             return
         }
+        reconnectInFlight = true
         val delayMs = reconnectBackoff[minOf(reconnectAttempt - 1, reconnectBackoff.size - 1)]
         _ui.update { it.copy(conn = ConnState.RECONNECTING, reconnectAttempt = reconnectAttempt) }
         log(LogCat.SYS, "Reconexión automática: intento $reconnectAttempt en ${delayMs / 1000}s")
@@ -252,7 +267,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                     .getSystemService(android.content.Context.BLUETOOTH_SERVICE)
                     as android.bluetooth.BluetoothManager
                 val device = btManager.adapter.getRemoteDevice(mac)
-                connectDevice(device, prefs().getString(KEY_NAME, null))
+                connectDevice(device, prefs().getString(KEY_NAME, null), isReconnect = true)
             } catch (e: Exception) {
                 _ui.update { it.copy(conn = ConnState.DISCONNECTED, reconnectAttempt = 0) }
                 log(LogCat.ERR, "Reconexión fallida: ${e.message}")
@@ -620,6 +635,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     fun disconnect() {
         reconnectCancelled = true
+        reconnectInFlight = false
         reconnectJob?.cancel()
         keepAliveJob?.cancel()
         currentMode = null

@@ -478,11 +478,16 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private fun getWifiIp(): String? {
         return try {
             val app = getApplication<Application>()
-            val wifiManager = app.getSystemService(android.content.Context.WIFI_SERVICE)
-                as android.net.wifi.WifiManager
-            val ip = wifiManager.connectionInfo.ipAddress
-            if (ip == 0) null
-            else "${ip and 0xff}.${(ip shr 8) and 0xff}.${(ip shr 16) and 0xff}.${(ip shr 24) and 0xff}"
+            val cm = app.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                as android.net.ConnectivityManager
+            val network = cm.activeNetwork ?: return null
+            val caps = cm.getNetworkCapabilities(network) ?: return null
+            if (!caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) return null
+            val props = cm.getLinkProperties(network) ?: return null
+            props.linkAddresses
+                .firstOrNull { it.address is java.net.Inet4Address }
+                ?.address
+                ?.hostAddress
         } catch (e: Exception) {
             null
         }

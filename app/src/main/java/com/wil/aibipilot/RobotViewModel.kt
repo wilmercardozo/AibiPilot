@@ -1,11 +1,15 @@
 package com.wil.aibipilot
 
 import android.app.Application
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wil.aibipilot.ble.BleClient
 import com.wil.aibipilot.ble.BleEvent
 import com.wil.aibipilot.ble.PhotoTcpServer
+import com.wil.aibipilot.ble.RemoteService
+import com.wil.aibipilot.ble.RemoteStateBus
 import com.wil.aibipilot.ble.ScanDevice
 import com.wil.aibipilot.protocol.Protocol
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +76,7 @@ data class UiState(
     val chat: List<ChatMsg> = emptyList(),
     val chatThinking: Boolean = false,
     val themeMode: String = "system",
+    val remoteRunning: Boolean = false,
     val snackbar: String? = null
 )
 
@@ -82,6 +87,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         private const val KEY_MAC = "last_device_mac"
         private const val KEY_NAME = "last_device_name"
         private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_REMOTE_TOKEN = "remote_token"
+        private const val KEY_REMOTE_PORT = "remote_port"
     }
 
     val ble = BleClient(app)
@@ -90,6 +97,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         loadThemeMode()
+        viewModelScope.launch {
+            RemoteStateBus.running.collect { running ->
+                _ui.update { it.copy(remoteRunning = running) }
+            }
+        }
     }
 
     private var currentDevice: android.bluetooth.BluetoothDevice? = null
@@ -130,6 +142,44 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     fun loadThemeMode() {
         val mode = prefs().getString(KEY_THEME_MODE, "system") ?: "system"
         _ui.update { it.copy(themeMode = mode) }
+    }
+
+    // ------------------------------------------------------------------
+    // Modo remoto (API HTTP en foreground service — spec C1)
+    // Una sola conexión BLE a la vez: con remoto activo la conexión la
+    // maneja RemoteController dentro del servicio y el VM no conecta.
+    // ------------------------------------------------------------------
+    private fun remoteActive(): Boolean = RemoteStateBus.running.value
+
+    fun remoteToken(): String = prefs().getString(KEY_REMOTE_TOKEN, "") ?: ""
+
+    fun saveRemoteToken(token: String) {
+        prefs().edit().putString(KEY_REMOTE_TOKEN, token.trim()).apply()
+    }
+
+    fun remotePort(): Int = prefs().getString(KEY_REMOTE_PORT, "8080")?.toIntOrNull() ?: 8080
+
+    fun saveRemotePort(port: Int) {
+        prefs().edit().putString(KEY_REMOTE_PORT, port.toString()).apply()
+    }
+
+    fun startRemoteMode() {
+        disconnect()
+        val ctx = getApplication<Application>()
+        ContextCompat.startForegroundService(ctx, Intent(ctx, RemoteService::class.java))
+        log("Modo remoto iniciado: la conexión pasa al servicio")
+        showSnackbar("Modo remoto activo: la conexión la maneja el servicio")
+    }
+
+    fun stopRemoteMode() {
+        val ctx = getApplication<Application>()
+        ctx.stopService(Intent(ctx, RemoteService::class.java))
+        log("Modo remoto detenido")
+        _ui.update { it.copy(connHint = null) }
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(500)
+            tryAutoReconnect()
+        }
     }
 
     /**
@@ -197,6 +247,10 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
      * Devuelve false si no hay robot guardado.
      */
     fun tryAutoReconnect(): Boolean {
+        if (remoteActive()) {
+            showSnackbar("Modo remoto activo: la conexión la maneja el servicio")
+            return false
+        }
         val mac = prefs().getString(KEY_MAC, null) ?: return false
         if (_ui.value.conn != ConnState.DISCONNECTED) return true
         val name = prefs().getString(KEY_NAME, null)
@@ -215,6 +269,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun connectDevice(device: android.bluetooth.BluetoothDevice, deviceName: String?, isReconnect: Boolean = false) {
+        if (remoteActive()) {
+            log(LogCat.SYS, "Modo remoto activo: no se inicia conexión BLE propia")
+            showSnackbar("Modo remoto activo: la conexión la maneja el servicio")
+            return
+        }
         android.util.Log.d("AibiBle", "VM.connect() called for ${device.address}")
         scanJob?.cancel()
         ble.stopScan()

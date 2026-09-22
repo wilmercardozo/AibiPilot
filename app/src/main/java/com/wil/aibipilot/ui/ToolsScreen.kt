@@ -16,8 +16,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessAlarm
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DirectionsRun
 import androidx.compose.material.icons.filled.Groups
@@ -29,6 +32,7 @@ import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.WbTwilight
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -38,6 +42,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -52,6 +57,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.wil.aibipilot.LogCat
@@ -69,6 +76,7 @@ private enum class ToolTab(val label: String, val icon: ImageVector) {
     LUCES("Luces", Icons.Default.LightMode),
     ALARMAS("Alarmas", Icons.Default.AccessAlarm),
     FOTOS("Fotos", Icons.Default.PhotoCamera),
+    REMOTO("Remoto", Icons.Default.Cloud),
     LOG("Log BLE", Icons.Default.Terminal),
 }
 
@@ -98,6 +106,7 @@ fun ToolsScreen(vm: RobotViewModel, ui: UiState) {
             ToolTab.LUCES -> LightsPane(vm, ui)
             ToolTab.ALARMAS -> AlarmsPane(vm, ui)
             ToolTab.FOTOS -> PhotosPane(vm, ui)
+            ToolTab.REMOTO -> RemotePane(vm, ui)
             ToolTab.LOG -> LogPane(vm, ui)
         }
     }
@@ -446,6 +455,150 @@ private fun PhotosPane(vm: RobotViewModel, ui: UiState) {
                         }
                     }
                     repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Modo remoto (spec C1: API HTTP en foreground service)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun RemotePane(vm: RobotViewModel, ui: UiState) {
+    var showConfig by remember { mutableStateOf(false) }
+
+    if (showConfig) {
+        var token by rememberSaveable { mutableStateOf(vm.remoteToken()) }
+        var port by rememberSaveable { mutableStateOf(vm.remotePort().toString()) }
+        AlertDialog(
+            onDismissRequest = { showConfig = false },
+            shape = RoundedCornerShape(16.dp),
+            title = { Text("Configurar modo remoto", style = MaterialTheme.typography.titleMedium) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = token,
+                        onValueChange = { token = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Token de acceso") },
+                        placeholder = { Text("secreto") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = port,
+                        onValueChange = { v ->
+                            if (v.length <= 5 && v.all { it.isDigit() }) port = v
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Puerto") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                    )
+                    Text(
+                        "La API escucha en tu red local (LAN) con token obligatorio. " +
+                            "Guía de integración con Hermes Agent: docs/HERMES.md",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.saveRemoteToken(token)
+                    vm.saveRemotePort(port.toIntOrNull() ?: 8080)
+                    showConfig = false
+                }) { Text("Guardar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showConfig = false }) { Text("Cancelar") }
+            },
+        )
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Cloud,
+                        contentDescription = null,
+                        tint = if (ui.remoteRunning) MaterialTheme.colorScheme.primary else TextSecondary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (ui.remoteRunning) "Modo remoto activo" else "Modo remoto",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = TextPrimary,
+                        )
+                        Text(
+                            if (ui.remoteRunning) {
+                                "La conexión la maneja el servicio"
+                            } else {
+                                "API HTTP local para Hermes, Telegram o cron"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                        )
+                    }
+                    Switch(
+                        checked = ui.remoteRunning,
+                        onCheckedChange = { on ->
+                            if (on) vm.startRemoteMode() else vm.stopRemoteMode()
+                        },
+                    )
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Configuración", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (vm.remoteToken().isEmpty()) {
+                                "Token: sin configurar"
+                            } else {
+                                "Token: configurado (${vm.remoteToken().length} caracteres)"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (vm.remoteToken().isEmpty()) Warning else TextSecondary,
+                        )
+                        Text(
+                            "Puerto: ${vm.remotePort()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                        )
+                    }
+                    OutlinedButton(onClick = { showConfig = true }) { Text("Configurar") }
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                if (ui.remoteRunning) {
+                    Text(
+                        "Modo remoto activo: la conexión BLE la maneja el servicio en segundo " +
+                            "plano y la app no iniciará su propia conexión. Podés detenerlo con el " +
+                            "toggle o desde la notificación («Parar»).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Warning,
+                    )
+                } else {
+                    Text(
+                        "Al activar el modo remoto la app pasa la conexión al servicio de fondo, " +
+                            "que levanta la API HTTP en tu red local. El token es obligatorio: sin " +
+                            "token configurado el servidor no arranca y se te avisa por notificación.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
                 }
             }
         }

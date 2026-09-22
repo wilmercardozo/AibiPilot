@@ -255,6 +255,13 @@ class RemoteService : Service() {
             .setContentText(text)
             .setSmallIcon(com.wil.aibipilot.R.mipmap.ic_launcher)
             .setOngoing(true)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    this, 0,
+                    Intent(this, MainActivity::class.java),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                )
+            )
             .addAction(0, "Parar", stopPending)
             .build()
         try {

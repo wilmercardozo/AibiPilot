@@ -160,10 +160,11 @@ class RemoteApiServer(
         }
         val body = readBody(input, contentLength)
 
-        // Auth: Bearer obligatorio. Log con IP+endpoint, nunca el token.
-        val expected = "Bearer $token"
+        // Auth: Bearer obligatorio. Prefijo case-insensitive, token case-sensitive.
+        // Log con IP+endpoint, nunca el token.
         if (token.isEmpty() || authorization == null ||
-            !authorization.equals(expected, ignoreCase = true)
+            !authorization.startsWith("bearer", ignoreCase = true) ||
+            authorization.drop(6).trim() != token
         ) {
             onLog("$ip $method $path -> 401 (token inválido o faltante)")
             send(output, 401, errorJson("token inválido o faltante"))
@@ -338,8 +339,9 @@ class RemoteApiServer(
         if (controller.state.value.conn != ConnState.CONNECTED) {
             return HttpResponse(409, errorJson("robot no conectado"))
         }
+        val jsonBody = body.ifBlank { "{}" }
         val obj = try {
-            Protocol.json.parseToJsonElement(body).jsonObject
+            Protocol.json.parseToJsonElement(jsonBody).jsonObject
         } catch (e: Exception) {
             return HttpResponse(400, errorJson("body JSON inválido"))
         }

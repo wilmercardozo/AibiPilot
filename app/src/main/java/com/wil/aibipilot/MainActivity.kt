@@ -1,5 +1,6 @@
 package com.wil.aibipilot
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -58,5 +59,12 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         vm.onAppForeground()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (::vm.isInitialized) {
+            intent.getStringExtra(EXTRA_RUN_ROUTINE_ID)?.let { vm.runPendingRoutine(it) }
+        }
     }
 }

@@ -79,26 +79,32 @@ class RoutineWorker(context: Context, params: WorkerParameters) :
                 ContextCompat.startForegroundService(ctx, intent)
             } catch (e: Exception) {
                 Log.w(TAG, "no se pudo encargar la rutina al servicio: ${e.message}")
+                notifyPendingRoutines(ctx, due)
             }
         } else {
-            due.forEach { r ->
-                val contentIntent = PendingIntent.getActivity(
-                    ctx,
-                    r.id.hashCode(),
-                    Intent(ctx, MainActivity::class.java)
-                        .putExtra(MainActivity.EXTRA_RUN_ROUTINE_ID, r.id),
-                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                )
-                AibiNotifier.notify(
-                    ctx,
-                    r.id.hashCode(),
-                    "Rutina pendiente",
-                    "${r.time} · ${routineSummary(r.action)}",
-                    contentIntent
-                )
-            }
+            notifyPendingRoutines(ctx, due)
         }
         return Result.success()
+    }
+
+    private fun notifyPendingRoutines(ctx: Context, due: List<Routine>) {
+        due.forEach { r ->
+            val contentIntent = PendingIntent.getActivity(
+                ctx,
+                r.id.hashCode(),
+                Intent(ctx, MainActivity::class.java)
+                    .putExtra(MainActivity.EXTRA_RUN_ROUTINE_ID, r.id)
+                    .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            AibiNotifier.notify(
+                ctx,
+                r.id.hashCode(),
+                "Rutina pendiente",
+                "${r.time} · ${routineSummary(r.action)}",
+                contentIntent
+            )
+        }
     }
 
     private fun routineSummary(action: RoutineAction): String = when (action.type) {

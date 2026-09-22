@@ -498,7 +498,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun send(bytes: ByteArray, label: String) {
-        android.util.Log.d("AibiBle", "TX $label")
+        android.util.Log.d("AibiBle", "TX $label [${bytes.size} bytes] ${bytes.toHex()}")
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 ble.write(bytes)

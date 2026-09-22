@@ -20,3 +20,4 @@ captures/
 
 # Metodología (workspace de ejecución, no se commitea)
 .metodologia/
+.superpowers/

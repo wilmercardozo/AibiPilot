@@ -26,8 +26,30 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - Volumen: `setting_req {"op":"volume","volume":"mute|low|high"}` (String)
 - Evento robot: `aibi_event` con `event:"modeout"` al salir de modo
 - OTA: robot se auto-actualiza por WiFi (`setting_req op:"update"`), API `https://api.aibipocket.com/`
-- Fotos: robot conecta TCP al teléfono puerto 9090; header `finish;name=x;filesize=N;delimited=------#`,
-  datos binarios, cierre `------------------` (18 guiones), ACK `ok`. Ver `PhotoTcpServer.kt`
+- Fotos: robot conecta TCP al teléfono puerto 9090; **header real por archivo: `name=x;filesize=N;delimited=------#`**
+  (SIN prefijo `finish;` — `finish` solo = 6 bytes que marcan fin de la sync), datos binarios,
+  cierre `------------------` (18 guiones), ACK `ok`. Antes del sync hay que entrar a modo photo
+  (`photo_in` → `photo_in_ok`). El robot necesita WiFi propio: si no, responde
+  `photo_sync_no "Failed to connect to App through Wi-Fi"`. Ver `PhotoTcpServer.kt`
+- Alarma add: campo `tag` (tipo 0..6), NO `index`; `index` solo en `del` y `list`
+- IP WiFi local de la tablet: usar ConnectivityManager (WifiManager.connectionInfo.ipAddress
+  devuelve 0 en MIUI; fix ya aplicado en `RobotViewModel.getWifiIp()`)
+
+## Verificado en vivo (22 sep 2026)
+- Volumen mute/low/high → `setting_volume_ok` · Alarmas list/add(tag)/del → `*_ok` ·
+  Juegos chess/snake/pirate/zero in/start/play → `*_ok` (play va sin parámetros extra)
+- Fotos: `photo_in_ok` + `photo_sync` OK hasta la red (transferencia TCP pendiente de robot con WiFi)
+- Reconexión automática (backoff 1-30s, 10 intentos), keep-alive (ping sta query[12] a los 20s
+  idle, solo sin modo activo) y diagnóstico de fallo (re-scan del MAC → hint "otra app" vs "dormido")
+
+## Quirks del robot (observados en vivo)
+- Los ACK de modo (`*_in_ok`) tardan 3-5s; `ensureMode()` tiene timeout 4s + fallback 700ms
+- `aibi_event modeout` llega por el modo ANTERIOR al cambiar de modo (el VM limpia currentMode
+  y se reenvía un "in" redundante — inofensivo)
+- Tras force-stop de la app, el primer reconnect falla con status 133; reintentar funciona
+- MIUI no entrega callback GATT al apagar el adaptador BT: el keep-alive fuerza la reconexión
+  sin depender del callback
+- Log BLE de la app: categorías TX/RX/EVT/ERR/SYS con filtros en la pestaña Log BLE
 
 ## Quirks del entorno
 - MIUI/HyperOS exige ACCESS_FINE_LOCATION para entregar resultados de scan BLE incluso en Android 12+

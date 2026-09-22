@@ -1,14 +1,10 @@
 package com.wil.aibipilot.ui
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,10 +26,8 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.RecordVoiceOver
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Terminal
@@ -68,7 +62,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -77,7 +70,6 @@ import com.wil.aibipilot.ConnState
 import com.wil.aibipilot.LogCat
 import com.wil.aibipilot.RobotViewModel
 import com.wil.aibipilot.UiState
-import com.wil.aibipilot.protocol.Animations
 import com.wil.aibipilot.ui.components.StatusPill
 import com.wil.aibipilot.ui.theme.TextPrimary
 import com.wil.aibipilot.ui.theme.TextSecondary
@@ -205,173 +197,6 @@ private fun ConnectedHeader(vm: RobotViewModel, ui: UiState) {
         }
         TextButton(onClick = { vm.disconnect() }) {
             Text("Desconectar", color = TextSecondary)
-        }
-    }
-}
-
-@Composable
-private fun TalkTab(vm: RobotViewModel, ui: UiState) {
-    var text by remember { mutableStateOf("") }
-    val context = LocalContext.current
-    val voiceLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val spoken = result.data
-            ?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
-            ?.firstOrNull()
-        if (!spoken.isNullOrBlank()) {
-            text = spoken
-            vm.speak(spoken)
-        }
-    }
-    Column {
-        ElevatedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                Text("Texto a voz (TTS)", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "El robot dirá el texto en voz alta. Respuesta esperada: show_speak_ok",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Ej: ¡Hola! ¿Cómo estás?") },
-                    maxLines = 4
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = {
-                            vm.speak(text)
-                            text = ""
-                        },
-                        enabled = text.isNotBlank() && ui.conn == ConnState.CONNECTED,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.Send, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Hablar")
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            try {
-                                val intent = android.content.Intent(
-                                    android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH
-                                ).apply {
-                                    putExtra(
-                                        android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                                        android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                                    )
-                                    putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "es-ES")
-                                    putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Habla ahora")
-                                }
-                                voiceLauncher.launch(intent)
-                            } catch (e: Exception) {
-                                // sin reconocimiento de voz instalado
-                            }
-                        }
-                    ) {
-                        Icon(Icons.Default.Mic, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Voz")
-                    }
-                }
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        ElevatedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                Text("Escenas", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "Macros: combinan luces, animación y voz.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SceneButton("🎉 Fiesta", Modifier.weight(1f)) { vm.playScene("fiesta") }
-                    SceneButton("🌅 Despertar", Modifier.weight(1f)) { vm.playScene("despertar") }
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SceneButton("🧘 Relax", Modifier.weight(1f)) { vm.playScene("relax") }
-                    SceneButton("🌙 Buenas noches", Modifier.weight(1f)) { vm.playScene("noche") }
-                }
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        ElevatedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                Text("Frases rápidas", style = MaterialTheme.typography.titleSmall)
-                Spacer(Modifier.height(8.dp))
-                val quick = listOf(
-                    "¡Hola!",
-                    "Buenos días",
-                    "Te quiero mucho",
-                    "Baila para mí",
-                    "Buenas noches"
-                )
-                quick.chunked(2).forEach { rowItems ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        rowItems.forEach { phrase ->
-                            TextButton(
-                                onClick = { vm.speak(phrase) },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(phrase)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SceneButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Button(onClick = onClick, modifier = modifier) {
-        Text(label)
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun AnimationsTab(vm: RobotViewModel) {
-    val groups = Animations.all.groupBy { it.group }
-    LazyColumn {
-        groups.forEach { (group, entries) ->
-            item {
-                Text(
-                    group,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            }
-            item {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    entries.forEach { entry ->
-                        ElevatedCard(
-                            onClick = { vm.playAnimation(entry.id) },
-                            modifier = Modifier.width(170.dp)
-                        ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(entry.label, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    entry.id,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -611,48 +436,6 @@ private fun AlarmsTab(vm: RobotViewModel, ui: UiState) {
                     )
                     OutlinedButton(onClick = { vm.alarmDel(alarm.index) }) {
                         Text("Eliminar")
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GamesTab(vm: RobotViewModel) {
-    val games = listOf(
-        "chess" to "Ajedrez",
-        "snake" to "Serpientes y escaleras",
-        "pirate" to "Pirate Wars",
-        "zero" to "Zero"
-    )
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        games.forEach { (id, label) ->
-            item {
-                ElevatedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(label, style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { vm.gameEnter(id) }, modifier = Modifier.weight(1f)) {
-                                Text("Entrar")
-                            }
-                            Button(onClick = { vm.gameStart(id) }, modifier = Modifier.weight(1f)) {
-                                Text("Empezar")
-                            }
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { vm.gamePlay(id) }, modifier = Modifier.weight(1f)) {
-                                Text("Jugar")
-                            }
-                            OutlinedButton(
-                                onClick = { vm.gameExit(id) },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("Salir")
-                            }
-                        }
                     }
                 }
             }

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -30,7 +31,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
-enum class ConnState { DISCONNECTED, SCANNING, CONNECTING, CONNECTED }
+enum class ConnState { DISCONNECTED, SCANNING, CONNECTING, CONNECTED, RECONNECTING }
 
 data class RobotInfo(
     val deviceName: String = "",
@@ -58,6 +59,8 @@ data class LogLine(val cat: LogCat, val text: String)
 
 data class UiState(
     val conn: ConnState = ConnState.DISCONNECTED,
+    val reconnectAttempt: Int = 0,
+    val connHint: String? = null,
     val devices: List<ScanDevice> = emptyList(),
     val info: RobotInfo = RobotInfo(),
     val log: List<LogLine> = emptyList(),
@@ -84,6 +87,20 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     private var currentDevice: android.bluetooth.BluetoothDevice? = null
     private var scanJob: kotlinx.coroutines.Job? = null
+
+    private var reconnectJob: kotlinx.coroutines.Job? = null
+    private var keepAliveJob: kotlinx.coroutines.Job? = null
+    private var reconnectAttempt = 0
+    private var reconnectCancelled = false
+    private var lastRxAt = 0L
+    private var lastTxAt = 0L
+
+    private val rxEvents = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
+        extraBufferCapacity = 64
+    )
+
+    private val reconnectBackoff = longArrayOf(1000, 2000, 4000, 8000, 15000, 30000)
+    private val MAX_RECONNECT_ATTEMPTS = 10
 
     private val modeAckFlow = kotlinx.coroutines.flow.MutableSharedFlow<String>(
         extraBufferCapacity = 16
@@ -127,6 +144,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     fun onAppForeground() {
         if (_ui.value.conn == ConnState.SCANNING) {
             startScan()
+        } else if (_ui.value.conn == ConnState.DISCONNECTED && !reconnectCancelled) {
+            tryAutoReconnect()
         }
     }
 
@@ -161,6 +180,10 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(conn = ConnState.CONNECTING, devices = emptyList()) }
         currentDevice = device
         log("Conectando a ${deviceName ?: "(sin nombre)"} (${device.address})")
+        reconnectCancelled = false
+        reconnectAttempt = 0
+        reconnectJob?.cancel()
+        _ui.update { it.copy(reconnectAttempt = 0, connHint = null) }
         ble.connect(
             device,
             onEvent = ::onBleEvent,
@@ -173,14 +196,18 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                         .apply()
                     _ui.update { it.copy(conn = ConnState.CONNECTED) }
                     log("Conectado. MTU: ${ble.currentMtu()}")
+                    startKeepAlive()
                     viewModelScope.launch {
                         kotlinx.coroutines.delay(1000)
                         handshake()
                     }
                 } else {
-                    // fallo de conexión o desconexión del robot
-                    _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
-                    log("Se perdió la conexión BLE")
+                    if (reconnectCancelled || _ui.value.conn == ConnState.CONNECTING) {
+                        _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
+                        log(LogCat.SYS, "Se perdió la conexión BLE")
+                    } else {
+                        scheduleReconnect()
+                    }
                 }
             }
         )
@@ -188,9 +215,103 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             kotlinx.coroutines.delay(12000)
             if (_ui.value.conn == ConnState.CONNECTING) {
-                log("Timeout de conexión. ¿El robot está despierto? ¿Otra app lo tiene conectado?")
                 ble.disconnect()
                 _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
+                log(LogCat.ERR, "Timeout de conexión")
+                diagnoseConnectFailure(device.address)
+            }
+        }
+    }
+
+    private fun scheduleReconnect() {
+        reconnectJob?.cancel()
+        reconnectAttempt++
+        if (reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
+            _ui.update {
+                it.copy(
+                    conn = ConnState.DISCONNECTED,
+                    reconnectAttempt = 0,
+                    connHint = "No se pudo reconectar. ¿El robot está dormido o apagado?"
+                )
+            }
+            log(LogCat.ERR, "Reconexión agotada tras $MAX_RECONNECT_ATTEMPTS intentos")
+            return
+        }
+        val delayMs = reconnectBackoff[minOf(reconnectAttempt - 1, reconnectBackoff.size - 1)]
+        _ui.update { it.copy(conn = ConnState.RECONNECTING, reconnectAttempt = reconnectAttempt) }
+        log(LogCat.SYS, "Reconexión automática: intento $reconnectAttempt en ${delayMs / 1000}s")
+        reconnectJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(delayMs)
+            val mac = prefs().getString(KEY_MAC, null)
+            if (mac == null) {
+                _ui.update { it.copy(conn = ConnState.DISCONNECTED, reconnectAttempt = 0) }
+                return@launch
+            }
+            try {
+                val btManager = getApplication<Application>()
+                    .getSystemService(android.content.Context.BLUETOOTH_SERVICE)
+                    as android.bluetooth.BluetoothManager
+                val device = btManager.adapter.getRemoteDevice(mac)
+                connectDevice(device, prefs().getString(KEY_NAME, null))
+            } catch (e: Exception) {
+                _ui.update { it.copy(conn = ConnState.DISCONNECTED, reconnectAttempt = 0) }
+                log(LogCat.ERR, "Reconexión fallida: ${e.message}")
+            }
+        }
+    }
+
+    /** Diagnóstico tras timeout de conexión: re-scan de 5s del MAC guardado. */
+    private fun diagnoseConnectFailure(mac: String) {
+        viewModelScope.launch {
+            var seen = false
+            try {
+                kotlinx.coroutines.withTimeoutOrNull(5000) {
+                    ble.scan().collect { dev ->
+                        if (dev.device.address.equals(mac, ignoreCase = true)) seen = true
+                    }
+                }
+            } finally {
+                ble.stopScan()
+            }
+            _ui.update {
+                it.copy(
+                    connHint = if (seen) {
+                        "El robot está al alcance pero rechazó la conexión. ¿Otra app (la oficial) lo tiene conectado? Cerrala y reintentá."
+                    } else {
+                        "El robot está dormido o fuera de alcance. Despertalo y volvé a intentar."
+                    }
+                )
+            }
+            log(LogCat.SYS, "Diagnóstico: ${if (seen) "al alcance, conexión rechazada" else "no visible (dormido/fuera de alcance)"}")
+        }
+    }
+
+    /**
+     * Keep-alive: si no hubo tráfico RX/TX en 20s y no estamos dentro de un modo
+     * de función (para no molestar juegos/fotos), hace un ping sta query[12] y, si
+     * no responde en 10s, fuerza la reconexión.
+     */
+    private fun startKeepAlive() {
+        keepAliveJob?.cancel()
+        keepAliveJob = viewModelScope.launch {
+            while (isActive) {
+                kotlinx.coroutines.delay(5000)
+                val now = android.os.SystemClock.elapsedRealtime()
+                val idle = now - lastRxAt > 20000 && now - lastTxAt > 20000
+                if (_ui.value.conn == ConnState.CONNECTED && currentMode == null && idle) {
+                    val pingAt = lastRxAt
+                    log(LogCat.SYS, "Sin tráfico del robot en 20s: ping de verificación")
+                    send(Protocol.staQuery(12), "ping sta battery")
+                    val responded = kotlinx.coroutines.withTimeoutOrNull(10000) {
+                        rxEvents.filter { lastRxAt > pingAt }.first()
+                        true
+                    } ?: false
+                    if (!responded) {
+                        log(LogCat.ERR, "El robot no responde al ping: forzando reconexión")
+                        ble.disconnect()
+                        scheduleReconnect()
+                    }
+                }
             }
         }
     }
@@ -201,6 +322,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun onBleEvent(event: BleEvent) {
+        lastRxAt = android.os.SystemClock.elapsedRealtime()
+        rxEvents.tryEmit(Unit)
         when (event) {
             is BleEvent.JsonMessage -> {
                 log(LogCat.RX, "RX ${event.json}")
@@ -496,15 +619,26 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun disconnect() {
+        reconnectCancelled = true
+        reconnectJob?.cancel()
+        keepAliveJob?.cancel()
         currentMode = null
         stopPhotoSync()
         ble.disconnect()
         currentDevice = null
-        _ui.update { it.copy(conn = ConnState.DISCONNECTED, info = RobotInfo()) }
-        log("Desconectado")
+        _ui.update {
+            it.copy(
+                conn = ConnState.DISCONNECTED,
+                reconnectAttempt = 0,
+                connHint = null,
+                info = RobotInfo()
+            )
+        }
+        log(LogCat.SYS, "Desconectado")
     }
 
     private fun send(bytes: ByteArray, label: String) {
+        lastTxAt = android.os.SystemClock.elapsedRealtime()
         android.util.Log.d("AibiBle", "TX $label [${bytes.size} bytes] ${bytes.toHex()}")
         viewModelScope.launch(Dispatchers.IO) {
             try {

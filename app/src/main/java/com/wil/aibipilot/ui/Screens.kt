@@ -171,6 +171,16 @@ private fun ScanScreen(vm: RobotViewModel, ui: UiState, modifier: Modifier) {
             return@Column
         }
 
+        ui.connHint?.let { hint ->
+            ElevatedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Aviso", style = MaterialTheme.typography.titleMedium)
+                    Text(hint, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
         Button(
             onClick = { vm.startScan() },
             enabled = ui.conn != ConnState.SCANNING
@@ -320,8 +330,15 @@ private fun ConnectedHeader(vm: RobotViewModel, ui: UiState) {
         Column(Modifier.weight(1f)) {
             Text("AIBI Pilot", style = MaterialTheme.typography.titleLarge)
             Text(
-                if (ui.conn == ConnState.CONNECTED) "Conectado ✓" else "Conectando...",
-                color = if (ui.conn == ConnState.CONNECTED) Color(0xFF2E7D32) else Color(0xFFF9A825),
+                when (ui.conn) {
+                    ConnState.CONNECTED -> "Conectado ✓"
+                    ConnState.RECONNECTING -> "Reconectando… (intento ${ui.reconnectAttempt})"
+                    else -> "Conectando..."
+                },
+                color = when (ui.conn) {
+                    ConnState.CONNECTED -> Color(0xFF2E7D32)
+                    else -> Color(0xFFF9A825)
+                },
                 style = MaterialTheme.typography.bodySmall
             )
         }

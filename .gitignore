@@ -1,0 +1,22 @@
+# Gradle
+.gradle/
+build/
+**/build/
+
+# Android
+local.properties
+*.apk
+*.aab
+*.keystore
+!gradle-wrapper.jar
+
+# IDE
+.idea/
+.kotlin/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Metodología (workspace de ejecución, no se commitea)
+.metodologia/

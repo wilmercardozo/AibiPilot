@@ -111,16 +111,17 @@ object Protocol {
 
     // ------------------------------------------------------------------
     // alarm (alarm_req / alarm_rsp): in, out, list, add, del
-    // time en formato "HH:mm" (24h). index = posición en la lista.
+    // add: tag (tipo/recordatorio 0..6) + time "HH:mm" (24h).
+    // del: index (posición en la lista).
     // ------------------------------------------------------------------
     fun alarmIn(): ByteArray = request("alarm_req", """{"op":"in"}""")
     fun alarmOut(): ByteArray = request("alarm_req", """{"op":"out"}""")
     fun alarmList(): ByteArray = request("alarm_req", """{"op":"list"}""")
-    fun alarmAdd(index: Int, time: String): ByteArray = request(
+    fun alarmAdd(tag: Int, time: String): ByteArray = request(
         "alarm_req",
         buildJsonObject {
             put("op", "add")
-            put("index", index)
+            put("tag", tag)
             put("time", time)
         }.toString()
     )

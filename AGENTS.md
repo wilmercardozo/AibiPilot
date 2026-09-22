@@ -102,3 +102,15 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   - jadx: `/tmp/jadx/bin/jadx`
   - apktool: `/tmp/bin/apktool`
   - APK oficial: `~/aibi/AIBI+Pocket_1.7.0_APKPure.xapk` (extraer el .apk interno)
+
+## Investigación de firmware (subproyecto D, 22 sep — ver docs/FIRMWARE-RESEARCH.md)
+- SoC del robot: **Espressif ESP32** (OUI MAC B4:3A:45 + EspRFTestTool_v2.6 en reporte FCC)
+- OTA: `api.aibipocket.com` sin auth; la app solo manda `setting_req op:"update"` y el robot
+  descarga por SU WiFi. El binario del firmware NO es accesible públicamente.
+- Canal BLE binario `DD CC`: sin consumidor en la app oficial; sondeable desde AibiPilot
+  (ya loguea "RX binario"). El comando `motion 55 AA 55 AA 21 <cmd>...ED` es la única primitiva
+  binaria TX (pantalla de debug oculta, `POST /aibiapp/support/testpage` code==200, no
+  allowlisteada para nuestro robot).
+- Incógnitas que bloquean firmware propio: binario del firmware + estado de eFuses del ESP32
+  (secure boot/flash encryption). Vías: sondeo DD CC (gratis), captura WiFi de OTA, o UART
+  (abrir el robot → espefuse.py summary).

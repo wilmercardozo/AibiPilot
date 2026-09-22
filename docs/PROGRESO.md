@@ -99,3 +99,28 @@ pruebas en vivo parciales (robot se durmió en tramos de sesiones largas).
 ### Costo del plan
 - ~9 despachos flash + 2 pro (QA senior + re-verificación) en Herdr; 3 fix loops con hallazgos
   reales (modo alarm, wrap de medianoche, doble instancia MainActivity).
+
+## 2026-09-22 — Plan "investigación de firmware" (subproyecto D)
+
+Estado: **COMPLETO**. Veredicto: firmware propio hoy NO viable (sin binario accesible ni estado
+de eFuses), con camino concreto de 2-3 pasos. Documento: `docs/FIRMWARE-RESEARCH.md`.
+
+### Resultado (4 capas de investigación)
+- **OTA**: API sin auth, escalera de versiones completa (1.0.1→1.7.0), sin URL de firmware; el
+  robot descarga por su propio WiFi.
+- **Binario**: no accesible públicamente (117 paths CDN probados, sin listado de bucket); la
+  app no verifica nada → la firma, si existe, está en el bootloader del robot.
+- **Hardware**: ESP32 confirmado (OUI MAC + herramienta RF en FCC); eFuses = incógnita crítica;
+  modelo exacto pendiente de análisis visual de fotos FCC.
+- **Debug**: canal `DD CC` sin consumidor en la app oficial, sondeable por BLE sin abrir el
+  robot; UART (abriendo) resolvería binario + eFuses + particiones de un golpe.
+
+### Próximos pasos priorizados (del documento)
+1. Sondear `DD CC` por BLE con la app actual (gratis).
+2. Capturar WiFi del robot durante una OTA (requiere robot con WiFi + AP/PCAP).
+3. Abrir el robot → UART → espefuse.py summary + dump (fuera del alcance actual).
+
+### Costo del plan
+- 5 despachos de research en Herdr (2 flash + 3 pro); 2 excedieron el tope de tiempo del run y
+  se recuperaron con wait. Evidencia completa guardada en el workspace (borrado al cerrar; lo
+  esencial está en el documento).

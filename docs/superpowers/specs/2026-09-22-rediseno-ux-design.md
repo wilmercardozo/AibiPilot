@@ -61,8 +61,8 @@ del subproyecto A. Sin features nuevas: esas son del subproyecto C.
 ### Inicio (dashboard)
 - Card robot: batería (label 1-4), pasos, monedas, comida, versión, MTU,
   pill de estado de conexión.
-- Grid de accesos rápidos (navegan o ejecutan directo): volumen, luces,
-  ajedrez, fotos, alarma, baile, TTS.
+- Grid de accesos rápidos que EJECUTAN directo (no navegan): volumen,
+  luces, ajedrez, fotos, alarma, baile, TTS.
 - Cards de escenas: fiesta / despertar / relax / noche.
 - Si `conn != CONNECTED`: banner "no conectado" → ir al wizard.
 

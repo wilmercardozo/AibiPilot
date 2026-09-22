@@ -1,6 +1,7 @@
 package com.wil.aibipilot.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,6 +28,8 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -63,6 +66,13 @@ fun AibiPilotApp(vm: RobotViewModel) {
         kotlinx.coroutines.delay(400)
         vm.tryAutoReconnect()
     }
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(ui.snackbar) {
+        ui.snackbar?.let { msg ->
+            snackbarHostState.showSnackbar(msg)
+            vm.dismissSnackbar()
+        }
+    }
     val isTablet = LocalConfiguration.current.screenWidthDp >= 840
     var dest by rememberSaveable { mutableStateOf(Destination.INICIO) }
     when {
@@ -70,39 +80,48 @@ fun AibiPilotApp(vm: RobotViewModel) {
             ui.conn == ConnState.CONNECTING ||
             ui.conn == ConnState.RECONNECTING -> {
             if (isTablet) {
-                Row(Modifier.fillMaxSize().padding(16.dp)) {
-                    NavigationRail {
-                        Spacer(Modifier.height(8.dp))
-                        Text("AIBI\nPilot", style = MaterialTheme.typography.titleSmall)
-                        Destination.entries.forEach { d ->
-                            NavigationRailItem(
-                                selected = dest == d,
-                                onClick = { dest = d },
-                                icon = { Icon(d.icon, contentDescription = d.label) },
-                                label = { Text(d.label) }
-                            )
+                Box(Modifier.fillMaxSize()) {
+                    Row(Modifier.fillMaxSize().padding(16.dp)) {
+                        NavigationRail {
+                            Spacer(Modifier.height(8.dp))
+                            Text("AIBI\nPilot", style = MaterialTheme.typography.titleSmall)
+                            Destination.entries.forEach { d ->
+                                NavigationRailItem(
+                                    selected = dest == d,
+                                    onClick = { dest = d },
+                                    icon = { Icon(d.icon, contentDescription = d.label) },
+                                    label = { Text(d.label) }
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.fillMaxSize()) {
+                            ConnectedHeader(vm, ui)
+                            Spacer(Modifier.height(12.dp))
+                            DestinationContent(dest, vm, ui)
                         }
                     }
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.fillMaxSize()) {
-                        ConnectedHeader(vm, ui)
-                        Spacer(Modifier.height(12.dp))
-                        DestinationContent(dest, vm, ui)
-                    }
+                    SnackbarHost(
+                        hostState = snackbarHostState,
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
                 }
             } else {
-                Scaffold(bottomBar = {
-                    NavigationBar {
-                        Destination.entries.forEach { d ->
-                            NavigationBarItem(
-                                selected = dest == d,
-                                onClick = { dest = d },
-                                icon = { Icon(d.icon, contentDescription = d.label) },
-                                label = { Text(d.label) }
-                            )
+                Scaffold(
+                    snackbarHost = { SnackbarHost(snackbarHostState) },
+                    bottomBar = {
+                        NavigationBar {
+                            Destination.entries.forEach { d ->
+                                NavigationBarItem(
+                                    selected = dest == d,
+                                    onClick = { dest = d },
+                                    icon = { Icon(d.icon, contentDescription = d.label) },
+                                    label = { Text(d.label) }
+                                )
+                            }
                         }
                     }
-                }) { pad ->
+                ) { pad ->
                     Column(Modifier.fillMaxSize().padding(pad).padding(16.dp)) {
                         ConnectedHeader(vm, ui)
                         Spacer(Modifier.height(8.dp))
@@ -111,7 +130,13 @@ fun AibiPilotApp(vm: RobotViewModel) {
                 }
             }
         }
-        else -> ConnectScreen(vm, ui, Modifier)
+        else -> Box(Modifier.fillMaxSize()) {
+            ConnectScreen(vm, ui, Modifier)
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
     }
 }
 

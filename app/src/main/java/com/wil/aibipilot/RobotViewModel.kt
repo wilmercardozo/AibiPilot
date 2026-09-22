@@ -71,7 +71,8 @@ data class UiState(
     val photos: List<String> = emptyList(),
     val chat: List<ChatMsg> = emptyList(),
     val chatThinking: Boolean = false,
-    val themeMode: String = "system"
+    val themeMode: String = "system",
+    val snackbar: String? = null
 )
 
 class RobotViewModel(app: Application) : AndroidViewModel(app) {
@@ -96,6 +97,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     private var reconnectJob: kotlinx.coroutines.Job? = null
     private var keepAliveJob: kotlinx.coroutines.Job? = null
+    private var snackbarNonce = 0
     private var reconnectAttempt = 0
     private var reconnectCancelled = false
     private var reconnectInFlight = false
@@ -127,6 +129,26 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     fun loadThemeMode() {
         val mode = prefs().getString(KEY_THEME_MODE, "system") ?: "system"
         _ui.update { it.copy(themeMode = mode) }
+    }
+
+    /**
+     * Muestra un snackbar transitorio (DESIGN §4.2). Se auto-limpia a los 3s solo si
+     * sigue siendo el mismo mensaje (nonce para no pisar mensajes nuevos).
+     */
+    fun showSnackbar(msg: String) {
+        val nonce = ++snackbarNonce
+        _ui.update { it.copy(snackbar = msg) }
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(3000)
+            if (snackbarNonce == nonce) {
+                _ui.update { it.copy(snackbar = null) }
+            }
+        }
+    }
+
+    fun dismissSnackbar() {
+        snackbarNonce++
+        _ui.update { it.copy(snackbar = null) }
     }
 
     private val photoDir: java.io.File
@@ -537,7 +559,10 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setVolume(level: String) {
         _ui.update { it.copy(volume = level) }
-        ensureMode("setting") { send(Protocol.settingVolume(level), "Volumen: $level") }
+        ensureMode("setting") {
+            send(Protocol.settingVolume(level), "Volumen: $level")
+            showSnackbar("Volumen ok")
+        }
     }
 
     fun refreshStatus() {
@@ -557,9 +582,15 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun alarmRefresh() = ensureMode("alarm") { send(Protocol.alarmList(), "alarm list") }
     fun alarmAdd(index: Int, time: String) =
-        ensureMode("alarm") { send(Protocol.alarmAdd(index, time), "alarm add #$index $time") }
+        ensureMode("alarm") {
+            send(Protocol.alarmAdd(index, time), "alarm add #$index $time")
+            showSnackbar("Alarma agregada")
+        }
     fun alarmDel(index: Int) =
-        ensureMode("alarm") { send(Protocol.alarmDel(index), "alarm del #$index") }
+        ensureMode("alarm") {
+            send(Protocol.alarmDel(index), "alarm del #$index")
+            showSnackbar("Alarma eliminada")
+        }
 
     // ------------------------------------------------------------------
     // Luces
@@ -619,6 +650,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             outputDir = photoDir,
             onPhoto = { file ->
                 _ui.update { it.copy(photos = it.photos + file.absolutePath) }
+                showSnackbar("Foto guardada: ${file.name}")
             },
             onLog = ::log
         )
@@ -690,6 +722,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 log(LogCat.TX, "TX $label [${bytes.size} bytes]")
             } catch (e: Exception) {
                 log(LogCat.ERR, "Error enviando $label: ${e.message}")
+                showSnackbar("Error enviando…")
             }
         }
     }

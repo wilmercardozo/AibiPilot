@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -106,6 +107,7 @@ private fun TtsCard(vm: RobotViewModel) {
                 text = ""
             },
             enabled = text.isNotBlank(),
+            leadingIcon = Icons.Default.RecordVoiceOver,
             modifier = Modifier.fillMaxWidth(),
         )
     }

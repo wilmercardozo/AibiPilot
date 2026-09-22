@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -208,13 +209,15 @@ fun ConnectScreen(vm: RobotViewModel, ui: UiState, modifier: Modifier = Modifier
         }
 
         vm.savedDeviceName()?.let { savedName ->
-            OutlinedButton(
-                onClick = { vm.tryAutoReconnect() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Bluetooth, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Reconectar a $savedName")
+            AppCard(Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { vm.tryAutoReconnect() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Bluetooth, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Reconectar a $savedName")
+                }
             }
             Spacer(Modifier.height(12.dp))
         }
@@ -223,6 +226,7 @@ fun ConnectScreen(vm: RobotViewModel, ui: UiState, modifier: Modifier = Modifier
             text = if (ui.conn == ConnState.SCANNING) "Escaneando…" else "Buscar robots",
             onClick = { vm.startScan() },
             enabled = ui.conn != ConnState.SCANNING,
+            leadingIcon = Icons.Default.Search,
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(16.dp))

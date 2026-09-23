@@ -147,11 +147,13 @@ Ejecutado con el robot real (AIBI-CF6A, fw 1.7.0) usando el barrido integrado en
   Referencias para buscar un reset/power físico: fotos internas FCC
   https://fccid.io/2AZ6R-AIBI + video de desarme https://www.youtube.com/watch?v=kxP7-glSbnE.
 - **HALLAZGO (usuario, 22 sep)**: **sí hay botones físicos — 2 botones bajo la tapa superior**
-  del robot. Uno de ellos APAGA el robot (recuperó el robot del diskmode: pulsar → se apagó →
-  encendió normal). El segundo botón queda por identificar (probable reset/boot u otra
-  función). Implicación: el robot SÍ tiene power físico y la tapa superior es removible sin
-  desarme destructivo → el acceso a la PCB (y potencialmente a pads UART) es más factible de
-  lo estimado; un futuro open/inspección es viable con riesgo bajo.
+  del robot. Uno APAGA el robot (recuperó el robot del diskmode: pulsar → se apagó →
+  encendió normal) y el otro hace **RESET (reinicio)** (verificado en vivo: pulsar →
+  BLE cae → el robot vuelve a publicar → la reconexión automática de AibiPilot lo
+  recuperó en ~8s, firmware intacto). Implicación: el robot tiene power y reset físicos y la
+  tapa superior es removible sin desarme destructivo → el acceso a la PCB (y potencialmente
+  a pads UART) es más factible de lo estimado; un futuro open/inspección es viable con riesgo
+  bajo.
 - **⚠ ADVERTENCIA**: NO barrer `motion` a ciegas en este robot: los cmds 0x18-0x1A activan
   diskmode, que mata el BLE y NO tiene salida por software ni botón (recuperación = batería
   agotada). El barrido quedó implementado en AibiPilot (Laboratorio) pero debe usarse con

@@ -111,6 +111,10 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   (ya loguea "RX binario"). El comando `motion 55 AA 55 AA 21 <cmd>...ED` es la única primitiva
   binaria TX (pantalla de debug oculta, `POST /aibiapp/support/testpage` code==200, no
   allowlisteada para nuestro robot).
+- **⚠ NO barrer `motion` a ciegas**: cmds 0x18-0x1A activan "diskmode" (modo fábrica que mata
+  el BLE; sin salida por software).
+- **Botones físicos: 2, bajo la tapa superior** (removible): uno = power off, otro = reset.
+  La reconexión automática de la app sobrevive un reset real (~8s).
 - Incógnitas que bloquean firmware propio: binario del firmware + estado de eFuses del ESP32
-  (secure boot/flash encryption). Vías: sondeo DD CC (gratis), captura WiFi de OTA, o UART
-  (abrir el robot → espefuse.py summary).
+  (secure boot/flash encryption). Vías: captura WiFi de OTA, o UART (abrir el robot →
+  espefuse.py summary).

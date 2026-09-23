@@ -95,6 +95,8 @@ object Protocol {
         }.toString()
     )
 
+    fun settingOff(): ByteArray = request("setting_req", """{"op":"off"}""")
+
     /** Comando binario de movimiento (formato del modo debug oficial):
      *  55 AA 55 AA 21 <cmd> 00...00 ED (20 bytes) */
     fun motion(cmd: Int): ByteArray {

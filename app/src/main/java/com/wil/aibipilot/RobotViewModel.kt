@@ -786,6 +786,13 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun powerOff() {
+        ensureMode("setting") {
+            send(Protocol.settingOff(), "Apagar robot")
+            showSnackbar("Apagando robot…")
+        }
+    }
+
     fun refreshStatus() {
         handshake()
     }

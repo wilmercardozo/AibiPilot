@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
@@ -154,6 +155,7 @@ private fun DestinationContent(dest: Destination, vm: RobotViewModel, ui: UiStat
 @Composable
 private fun ConnectedHeader(vm: RobotViewModel, ui: UiState) {
     var showTheme by remember { mutableStateOf(false) }
+    var showPowerOff by remember { mutableStateOf(false) }
     if (showTheme) {
         AlertDialog(
             onDismissRequest = { showTheme = false },
@@ -179,6 +181,27 @@ private fun ConnectedHeader(vm: RobotViewModel, ui: UiState) {
             }
         )
     }
+    if (showPowerOff) {
+        AlertDialog(
+            onDismissRequest = { showPowerOff = false },
+            shape = RoundedCornerShape(16.dp),
+            title = { Text("¿Apagar el robot?", style = MaterialTheme.typography.titleMedium) },
+            text = { Text("Se apagará por completo. Para encenderlo tendrás que tocarlo.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showPowerOff = false
+                        vm.powerOff()
+                    }
+                ) {
+                    Text("Apagar", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPowerOff = false }) { Text("Cancelar") }
+            }
+        )
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
@@ -193,6 +216,9 @@ private fun ConnectedHeader(vm: RobotViewModel, ui: UiState) {
         Spacer(Modifier.width(4.dp))
         IconButton(onClick = { showTheme = true }) {
             Icon(Icons.Default.Settings, contentDescription = "Apariencia")
+        }
+        IconButton(onClick = { showPowerOff = true }) {
+            Icon(Icons.Default.PowerSettingsNew, contentDescription = "Apagar robot")
         }
         TextButton(onClick = { vm.disconnect() }) {
             Text("Desconectar", color = TextSecondary)

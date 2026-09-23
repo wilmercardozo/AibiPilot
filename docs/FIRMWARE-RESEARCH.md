@@ -162,6 +162,27 @@ Ejecutado con el robot real (AIBI-CF6A, fw 1.7.0) usando el barrido integrado en
   comando de diskmode. Quedan sin sondear 32..255 (con las reservas de arriba) y la hipótesis
   de que `DD CC` solo emita ante comandos específicos de fábrica.
 
+### Comando 97 (0x61) — rebuild del filesystem / actualización de fábrica (23 sep)
+
+- Barrido 27..100 del usuario: el comando **97 (0x61)** disparó un proceso largo en el robot
+  (pantalla con "mucha info"): **descarga → % progresivo → "extract files" → reinicio normal**.
+  Comportamiento compatible con una actualización/rebuild de fábrica del filesystem
+  (posiblemente reset de datos del usuario). Al terminar, el robot arrancó normal con la app
+  (firmware 1.7.0 intacto según handshake). Junto con 0x18-0x1A (diskmode), confirma que el
+  rango motion guarda comandos de fábrica REALES y peligrosos: ⚠ NO barrer sin botón físico a
+  mano (ya tenemos: power y reset bajo la tapa superior).
+- **Intento de captura en vivo**: el robot apareció en <SSID_CASA> (<IP_LAN>, MAC
+  `b4:3a:45:aa:bb:cc` = WiFi del mismo ESP32) durante el proceso. Se armó arp-spoof + tcpdump
+  a mitad del rebuild y **no se capturó tráfico de descarga** → hipótesis fuerte: la
+  "descarga" es LOCAL (imagen de fábrica en la flash, extraída al filesystem), no de internet.
+  No descartado al 100%: la captura arrancó después del inicio del proceso.
+- **AP propio para interceptar (plan siguiente)**: la WiFi de la workstation (iwlwifi/Intel)
+  NO soporta modo AP ("Failed to set beacon parameters" en hostapd) — se necesita dongle USB
+  2.4GHz (~U$5, RTL8188/MT7601) o captura vía arp-spoof en <SSID_CASA> con la trampa armada ANTES
+  de disparar 0x61. La app oficial puede configurar el WiFi del robot (`op:"wifiset"`).
+  Pendiente: repetir 0x61 con captura desde el inicio y, si el robot pierde credenciales
+  WiFi tras el rebuild, reconfigurárselas.
+
 **UART/bootloader — resolvería todo, requiere abrir el robot:**
 - Todos los ESP32 arrancan por UART0 a 115200; con GPIO0 a GND durante el reset entran a
   **modo download**. Con pads UART0/GPIO0/EN expuestos y un adaptador USB-UART 3.3V:

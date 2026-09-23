@@ -112,7 +112,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   binaria TX (pantalla de debug oculta, `POST /aibiapp/support/testpage` code==200, no
   allowlisteada para nuestro robot).
 - **⚠ NO barrer `motion` a ciegas**: cmds 0x18-0x1A activan "diskmode" (modo fábrica que mata
-  el BLE; sin salida por software).
+  el BLE; sin salida por software) y 0x61 (97) dispara un rebuild completo del filesystem
+  (descarga→extract→reboot, posible reset de datos). Ambos con botones físicos de recuperación
+  bajo la tapa superior (power + reset).
 - **Botones físicos: 2, bajo la tapa superior** (removible): uno = power off, otro = reset.
   La reconexión automática de la app sobrevive un reset real (~8s).
 - Incógnitas que bloquean firmware propio: binario del firmware + estado de eFuses del ESP32

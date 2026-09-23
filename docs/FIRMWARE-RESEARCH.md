@@ -128,6 +128,28 @@ Evidencia: `.metodologia/firmware-d/evidence/debug/` (testpage probes, rutas del
   Log BLE); fase activa — `Protocol.motion(cmd)` barriendo 0..255 de a uno con pausa 1-2 s,
   empezando por 0..15. Coste: cero hardware.
 
+### Sondeo DD CC EN VIVO (22 sep 2026) — resultado y advertencia
+
+Ejecutado con el robot real (AIBI-CF6A, fw 1.7.0) usando el barrido integrado en AibiPilot:
+
+- **Fase pasiva**: flujos normales (handshake, TTS, luz, volumen, dance, chess in/start) →
+  **cero frames `DD CC`**. El robot no emite binario espontáneo en uso normal.
+- **Fase activa (motion 0..31)**: cero respuestas `DD CC` y cero respuestas JSON.
+  **PERO** al enviar los comandos **24-26 (0x18-0x1A)** el robot **entró en "diskmode"**
+  (modo disco USB de fábrica, mostrado en su pantalla) y **cortó el BLE inmediatamente**
+  (`conn state: 8/0`). Los barridos posteriores (32-159) cayeron al vacío (robot sin BLE).
+- **diskmode**: sin referencia en la app oficial (no lo usa). Al conectarlo por USB a la PC a
+  través de la base de carga, **NO aparece ningún dispositivo USB** (la base es solo
+  alimentación, sin líneas de datos) y **el robot no tiene puerto USB ni botón físico**.
+  Salida del modo: solo agotando la batería (o el posible touch long-press / timeout).
+- **⚠ ADVERTENCIA**: NO barrer `motion` a ciegas en este robot: los cmds 0x18-0x1A activan
+  diskmode, que mata el BLE y NO tiene salida por software ni botón (recuperación = batería
+  agotada). El barrido quedó implementado en AibiPilot (Laboratorio) pero debe usarse con
+  rangos informados, no a ciegas.
+- Conclusión del sondeo: el canal `DD CC` no respondió en 0..31; el hallazgo real fue el
+  comando de diskmode. Quedan sin sondear 32..255 (con las reservas de arriba) y la hipótesis
+  de que `DD CC` solo emita ante comandos específicos de fábrica.
+
 **UART/bootloader — resolvería todo, requiere abrir el robot:**
 - Todos los ESP32 arrancan por UART0 a 115200; con GPIO0 a GND durante el reset entran a
   **modo download**. Con pads UART0/GPIO0/EN expuestos y un adaptador USB-UART 3.3V:

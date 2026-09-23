@@ -97,8 +97,11 @@ Evidencia: `.metodologia/firmware-d/evidence/hardware/sources.md` (URLs por hall
   ESP32-C2/C3, ESP32-C6. Batería LiPo 1S 3.8V 350mAh/1.33Wh, carga USB 5V 1A, antena chip
   CA-C03 4.3dBi.
 - **Pines/puertos: desconocidos** (sin evidencia pública de pads UART/SWD/JTAG ni botón de
-  boot). Existen 19 fotos internas FCC (exhibit 7761408) y un video de desarme de la comunidad
-  (https://www.youtube.com/watch?v=kxP7-glSbnE) pendientes de análisis visual.
+  boot). Pendientes de análisis visual (requieren vista humana):
+  - 19 fotos internas FCC, exhibit 7761408, FCC ID `2AZ6R-AIBI`:
+    https://fccid.io/2AZ6R-AIBI (espejo: https://fcc.report/FCC-ID/2AZ6R-AIBI)
+  - Video de desarme de la comunidad: https://www.youtube.com/watch?v=kxP7-glSbnE
+  En las fotos internas suele verse el botón de reset/power y los pads de test de la PCB.
 - Implicaciones de flasheo: si hay acceso UART0, el reemplazo de firmware es **rutinario con
   esptool.py** (flash SPI del módulo) — el hardware no cierra el camino. **La incógnita
   crítica son los eFuses**: secure boot y flash encryption son opcionales en Espressif y no
@@ -142,6 +145,8 @@ Ejecutado con el robot real (AIBI-CF6A, fw 1.7.0) usando el barrido integrado en
   través de la base de carga, **NO aparece ningún dispositivo USB** (la base es solo
   alimentación, sin líneas de datos) y **el robot no tiene puerto USB ni botón físico**.
   Salida del modo: solo agotando la batería (o el posible touch long-press / timeout).
+  Referencias para buscar un reset/power físico: fotos internas FCC
+  https://fccid.io/2AZ6R-AIBI + video de desarme https://www.youtube.com/watch?v=kxP7-glSbnE.
 - **⚠ ADVERTENCIA**: NO barrer `motion` a ciegas en este robot: los cmds 0x18-0x1A activan
   diskmode, que mata el BLE y NO tiene salida por software ni botón (recuperación = batería
   agotada). El barrido quedó implementado en AibiPilot (Laboratorio) pero debe usarse con

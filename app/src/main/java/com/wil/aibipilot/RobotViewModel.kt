@@ -159,6 +159,8 @@ data class UiState(
     val remoteRunning: Boolean = false,
     val routines: List<Routine> = emptyList(),
     val rawHistory: List<String> = emptyList(),
+    val motionSweeping: Boolean = false,
+    val motionSweepCmd: Int? = null,
     val snackbar: String? = null
 )
 
@@ -584,6 +586,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             }
             is BleEvent.RawMessage -> {
                 log(LogCat.RX, "RX binario: ${event.bytes.toHex().take(64)}")
+                android.util.Log.d("AibiBle", "RX binario ${event.bytes.toHex()}")
             }
         }
     }
@@ -1000,6 +1003,36 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     fun clearRawHistory() {
         _ui.update { it.copy(rawHistory = emptyList()) }
         prefs().edit().remove(KEY_RAW_HISTORY).apply()
+    }
+
+    // ------------------------------------------------------------------
+    // Barrido motion (sondeo DD CC): barre cmd 0..255 del frame binario
+    // de movimiento con 1.5s entre envíos. Las respuestas binarias del
+    // robot se loguean completas en logcat (tag AibiBle).
+    // ------------------------------------------------------------------
+    private var motionSweepJob: kotlinx.coroutines.Job? = null
+
+    fun startMotionSweep(from: Int, to: Int) {
+        if (from !in 0..255 || to !in 0..255 || from > to) return
+        if (_ui.value.motionSweeping) return
+        motionSweepJob?.cancel()
+        _ui.update { it.copy(motionSweeping = true, motionSweepCmd = from) }
+        motionSweepJob = viewModelScope.launch {
+            for (cmd in from..to) {
+                _ui.update { it.copy(motionSweepCmd = cmd) }
+                send(Protocol.motion(cmd), "motion cmd $cmd")
+                kotlinx.coroutines.delay(1500)
+            }
+            _ui.update { it.copy(motionSweeping = false, motionSweepCmd = null) }
+            showSnackbar("Barrido completo")
+        }
+    }
+
+    fun stopMotionSweep() {
+        if (!_ui.value.motionSweeping) return
+        motionSweepJob?.cancel()
+        _ui.update { it.copy(motionSweeping = false, motionSweepCmd = null) }
+        showSnackbar("Barrido detenido")
     }
 
     // ------------------------------------------------------------------

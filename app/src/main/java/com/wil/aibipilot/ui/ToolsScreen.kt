@@ -939,6 +939,8 @@ private val labTemplates = listOf(
 private fun LabPane(vm: RobotViewModel, ui: UiState) {
     var editor by rememberSaveable { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
+    var sweepFrom by rememberSaveable { mutableStateOf("0") }
+    var sweepTo by rememberSaveable { mutableStateOf("15") }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -974,6 +976,67 @@ private fun LabPane(vm: RobotViewModel, ui: UiState) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "Las respuestas del robot se ven en la sub-pestaña Log BLE.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                Text("Barrido motion (DD CC)", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                Spacer(Modifier.height(8.dp))
+                val from = sweepFrom.toIntOrNull()
+                val to = sweepTo.toIntOrNull()
+                val rangeValid = from != null && to != null && from in 0..255 && to in 0..255 && from <= to
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = sweepFrom,
+                        onValueChange = { v ->
+                            if (v.length <= 3 && v.all { it.isDigit() }) sweepFrom = v
+                        },
+                        modifier = Modifier.width(120.dp),
+                        label = { Text("Desde") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = sweepTo,
+                        onValueChange = { v ->
+                            if (v.length <= 3 && v.all { it.isDigit() }) sweepTo = v
+                        },
+                        modifier = Modifier.width(120.dp),
+                        label = { Text("Hasta") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                PrimaryButton(
+                    text = "Iniciar barrido",
+                    onClick = {
+                        if (from != null && to != null) vm.startMotionSweep(from, to)
+                    },
+                    enabled = rangeValid && !ui.motionSweeping,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (ui.motionSweeping) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Barriendo cmd ${ui.motionSweepCmd ?: ""}…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextPrimary,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { vm.stopMotionSweep() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Parar")
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Las respuestas binarias (DD CC) se ven completas en logcat y truncadas en Log BLE.",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary,
                 )

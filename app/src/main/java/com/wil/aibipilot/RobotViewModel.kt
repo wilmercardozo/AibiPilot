@@ -161,6 +161,9 @@ data class UiState(
     val rawHistory: List<String> = emptyList(),
     val motionSweeping: Boolean = false,
     val motionSweepCmd: Int? = null,
+    val wifiNetworks: List<String> = emptyList(),
+    val wifiScanning: Boolean = false,
+    val robotWifi: String? = null,
     val snackbar: String? = null
 )
 
@@ -427,6 +430,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                         kotlinx.coroutines.delay(1000)
                         handshake()
                     }
+                    firePendingMotion()
                 } else {
                     if (reconnectCancelled) {
                         _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
@@ -612,6 +616,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             }
             "alarm_rsp" -> parseAlarmRsp(root)
             "light_rsp" -> parseLightRsp(root)
+            "setting_rsp" -> parseSettingRsp(root)
             else -> {
                 // ACKs de modo y resultados de features: avisar a ensureMode
                 root["data"]?.jsonObject?.get("result")?.jsonPrimitive?.contentOrNull?.let {
@@ -621,6 +626,28 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             }
         } catch (e: Exception) {
             android.util.Log.e("AibiBle", "parseResponse error: ${e.message}", e)
+        }
+    }
+
+    private fun parseSettingRsp(root: JsonObject) {
+        val data = root["data"]?.jsonObject ?: return
+        val result = data["result"]?.jsonPrimitive?.contentOrNull ?: return
+        // loguear el resultado al modo ack (setting_in_ok, setting_volume_ok, etc.)
+        modeAckFlow.tryEmit(result)
+        // respuesta de wifilist: el formato real se aprende en vivo (lista en "list" o similar)
+        if (result.contains("wifilist", ignoreCase = true)) {
+            val list = data["list"]?.jsonArray
+            val networks = mutableListOf<String>()
+            if (list != null) {
+                for (el in list) {
+                    val obj = el as? JsonObject ?: continue
+                    val name = obj["name"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["ssid"]?.jsonPrimitive?.contentOrNull
+                    if (name != null) networks.add(name)
+                }
+            }
+            _ui.update { it.copy(wifiNetworks = networks, wifiScanning = false) }
+            log(LogCat.RX, "WiFi list: ${networks.joinToString()}")
         }
     }
 
@@ -670,8 +697,12 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         val data = root["data"]?.jsonObject ?: return
         val result = data["result"]?.jsonPrimitive?.contentOrNull
         if (result == "sta_query_ok") {
+            val wifi = data["wifi"]?.jsonObject
+            val wifiSsid = wifi?.get("ssid")?.jsonPrimitive?.contentOrNull
+                ?: wifi?.get("name")?.jsonPrimitive?.contentOrNull
             _ui.update { s ->
                 s.copy(
+                    robotWifi = wifiSsid ?: s.robotWifi,
                     info = s.info.copy(
                         version = data["version"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull ?: s.info.version,
                         versionNumber = data["version"]?.jsonObject?.get("number")?.jsonPrimitive?.contentOrNull ?: s.info.versionNumber,
@@ -783,6 +814,22 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         ensureMode("setting") {
             send(Protocol.settingVolume(level), "Volumen: $level")
             showSnackbar("Volumen ok")
+        }
+    }
+
+    fun wifiScan() {
+        _ui.update { it.copy(wifiScanning = true) }
+        ensureMode("setting") { send(Protocol.settingWifiList(), "wifi list") }
+    }
+
+    fun wifiStatus() {
+        send(Protocol.staQuery(4), "wifi status")
+    }
+
+    fun setRobotWifi(ssid: String, password: String) {
+        ensureMode("setting") {
+            send(Protocol.settingWifiSet(ssid, password), "wifi set $ssid")
+            showSnackbar("Conectando al robot a $ssid…")
         }
     }
 
@@ -1040,6 +1087,22 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         motionSweepJob?.cancel()
         _ui.update { it.copy(motionSweeping = false, motionSweepCmd = null) }
         showSnackbar("Barrido detenido")
+    }
+
+    private var pendingMotionCmd: Int? = null
+
+    fun scheduleMotion(cmd: Int) {
+        pendingMotionCmd = cmd
+        if (_ui.value.conn == ConnState.CONNECTED) firePendingMotion()
+    }
+
+    private fun firePendingMotion() {
+        val cmd = pendingMotionCmd ?: return
+        pendingMotionCmd = null
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(2000)
+            send(Protocol.motion(cmd), "motion cmd $cmd")
+        }
     }
 
     // ------------------------------------------------------------------

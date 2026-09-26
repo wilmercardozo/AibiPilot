@@ -19,6 +19,9 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_RUN_ROUTINE_ID = "run_routine_id"
+        const val EXTRA_MOTION_CMD = "motion_cmd"
+        const val EXTRA_MOTION_FROM = "motion_from"
+        const val EXTRA_MOTION_TO = "motion_to"
         private const val PREFS = "aibi_pilot_prefs"
         private const val KEY_NOTIF_ASKED = "notif_perm_asked"
         private const val REQ_NOTIFICATIONS = 1001
@@ -33,6 +36,12 @@ class MainActivity : ComponentActivity() {
         maybeRequestNotificationPermission()
         if (savedInstanceState == null) {
             intent?.getStringExtra(EXTRA_RUN_ROUTINE_ID)?.let { vm.runPendingRoutine(it) }
+            intent?.getIntExtra(EXTRA_MOTION_CMD, -1)?.let { if (it in 0..255) vm.scheduleMotion(it) }
+            intent?.getIntExtra(EXTRA_MOTION_FROM, -1)?.let { from ->
+                intent.getIntExtra(EXTRA_MOTION_TO, -1).let { to ->
+                    if (from in 0..255 && to in from..255) vm.startMotionSweep(from, to)
+                }
+            }
         }
         setContent {
             val ui by vm.ui.collectAsStateWithLifecycle()

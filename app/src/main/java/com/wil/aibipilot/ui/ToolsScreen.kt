@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.TheaterComedy
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.WbTwilight
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -86,12 +87,14 @@ import com.wil.aibipilot.ui.components.SectionTitle
 import com.wil.aibipilot.ui.theme.TextPrimary
 import com.wil.aibipilot.ui.theme.TextSecondary
 import com.wil.aibipilot.ui.theme.Warning
+import com.wil.aibipilot.ui.theme.StatusGreen
 
 private enum class ToolTab(val label: String, val icon: ImageVector) {
     LUCES("Luces", Icons.Default.LightMode),
     ALARMAS("Alarmas", Icons.Default.AccessAlarm),
     RUTINAS("Rutinas", Icons.Default.Schedule),
     FOTOS("Fotos", Icons.Default.PhotoCamera),
+    WIFI("WiFi", Icons.Default.Wifi),
     REMOTO("Remoto", Icons.Default.Cloud),
     LABORATORIO("Laboratorio", Icons.Default.Science),
     LOG("Log BLE", Icons.Default.Terminal),
@@ -124,6 +127,7 @@ fun ToolsScreen(vm: RobotViewModel, ui: UiState) {
             ToolTab.ALARMAS -> AlarmsPane(vm, ui)
             ToolTab.RUTINAS -> RoutinesPane(vm, ui)
             ToolTab.FOTOS -> PhotosPane(vm, ui)
+            ToolTab.WIFI -> WifiPane(vm, ui)
             ToolTab.REMOTO -> RemotePane(vm, ui)
             ToolTab.LABORATORIO -> LabPane(vm, ui)
             ToolTab.LOG -> LogPane(vm, ui)
@@ -773,6 +777,90 @@ private fun PhotosPane(vm: RobotViewModel, ui: UiState) {
 // ---------------------------------------------------------------------------
 // Modo remoto (spec C1: API HTTP en foreground service)
 // ---------------------------------------------------------------------------
+
+@Composable
+private fun WifiPane(vm: RobotViewModel, ui: UiState) {
+    var selected by remember { mutableStateOf<String?>(null) }
+    var password by remember { mutableStateOf("") }
+    var showDialog by remember { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        AppCard(Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("Red del robot")
+                LaunchedEffect(Unit) { vm.wifiStatus() }
+                Text(
+                    if (ui.robotWifi != null) "Conectado a: ${ui.robotWifi}"
+                    else "Sin red (o sin datos todavía — tocá el estado para refrescar)",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (ui.robotWifi != null) StatusGreen else TextSecondary,
+                    modifier = Modifier.clickable { vm.wifiStatus() },
+                )
+                Text(
+                    "El robot escanea las redes cercanas por BLE. Elegí una y pasale la contraseña.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
+                Spacer(Modifier.height(4.dp))
+                PrimaryButton(
+                    text = if (ui.wifiScanning) "Escaneando…" else "Buscar redes",
+                    onClick = { vm.wifiScan() },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !ui.wifiScanning,
+                )
+            }
+        }
+        if (ui.wifiNetworks.isEmpty() && !ui.wifiScanning) {
+            EmptyState(
+                icon = Icons.Default.Wifi,
+                title = "Sin redes",
+                subtitle = "Tocá \"Buscar redes\" para que el robot escanee.",
+            )
+        } else {
+            ui.wifiNetworks.forEach { net ->
+                AppCard(Modifier.fillMaxWidth().clickable {
+                    selected = net
+                    password = ""
+                    showDialog = true
+                }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Wifi, contentDescription = null, tint = TextPrimary)
+                        Spacer(Modifier.width(12.dp))
+                        Text(net, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                    }
+                }
+            }
+        }
+    }
+
+    if (showDialog && selected != null) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            shape = RoundedCornerShape(16.dp),
+            title = { Text("Conectar a ${selected}", style = MaterialTheme.typography.titleMedium) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Contraseña") },
+                        singleLine = true,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.setRobotWifi(selected!!, password)
+                    showDialog = false
+                }) { Text("Conectar", color = MaterialTheme.colorScheme.primary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) { Text("Cancelar", color = TextSecondary) }
+            },
+        )
+    }
+}
 
 @Composable
 private fun RemotePane(vm: RobotViewModel, ui: UiState) {

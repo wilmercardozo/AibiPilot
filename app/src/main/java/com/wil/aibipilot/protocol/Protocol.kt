@@ -97,6 +97,17 @@ object Protocol {
 
     fun settingOff(): ByteArray = request("setting_req", """{"op":"off"}""")
 
+    fun settingWifiList(): ByteArray = request("setting_req", """{"op":"wifilist"}""")
+
+    fun settingWifiSet(ssid: String, password: String): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "wifiset")
+            put("ssid", ssid)
+            put("password", password)
+        }.toString()
+    )
+
     /** Comando binario de movimiento (formato del modo debug oficial):
      *  55 AA 55 AA 21 <cmd> 00...00 ED (20 bytes) */
     fun motion(cmd: Int): ByteArray {

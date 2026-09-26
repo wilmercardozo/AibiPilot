@@ -32,6 +32,10 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   (`photo_in` → `photo_in_ok`). El robot necesita WiFi propio: si no, responde
   `photo_sync_no "Failed to connect to App through Wi-Fi"`. Ver `PhotoTcpServer.kt`
 - Alarma add: campo `tag` (tipo 0..6), NO `index`; `index` solo en `del` y `list`
+- WiFi del robot (verificado en vivo): `setting_req op:"wifilist"` → `setting_wifilist_ok`
+  con `data.list[]` (`ssid`,`rssi`); `op:"wifiset" {ssid,password}` (password vacía = red
+  abierta) → `setting_wifiset_ok`; `sta_req query[4]` → `wifi.ssid` actual. Pestaña WiFi en
+  Herramientas.
 - IP WiFi local de la tablet: usar ConnectivityManager (WifiManager.connectionInfo.ipAddress
   devuelve 0 en MIUI; fix ya aplicado en `RobotViewModel.getWifiIp()`)
 

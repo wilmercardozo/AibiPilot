@@ -183,6 +183,24 @@ Ejecutado con el robot real (AIBI-CF6A, fw 1.7.0) usando el barrido integrado en
   Pendiente: repetir 0x61 con captura desde el inicio y, si el robot pierde credenciales
   WiFi tras el rebuild, reconfigurárselas.
 
+### Captura con ESP32-AP (25 sep — parcial, en curso)
+
+- **AibiPilot ahora configura el WiFi del robot** (verificado en vivo): `setting_req
+  op:"wifilist"` (el robot devuelve `data.list[]` con `ssid`+`rssi`), `op:"wifiset" {ssid,
+  password}` → `setting_wifiset_ok` (password vacía = red abierta), y `sta_req query[4]`
+  devuelve el `wifi.ssid` actual. Pestaña "WiFi" en Herramientas.
+- **ESP32 (devkit clásico 4MB) como AP espía**: sketch Arduino (`/tmp/esp-spy`, no en el
+  repo) con softAP AIBI-CAP + servidores TCP en 80/443/8080/8883/1883/9090 (captive DNS
+  nativo redirige todo) + **modo promiscuo** logueando cada frame del robot con su IP destino.
+  - Quirks: el robot manda frames CCMP-PMF ("non-zero reserved bit") que rompen el handshake
+    WPA2 con el AP ESP32 → el AP debe ser **abierto** (sin WPA) para que el robot conecte.
+  - Resultado: el robot asocia y obtiene IP (192.168.4.2) pero **no transmite nada** (ni DNS
+    ni IP fija) y cicla connect/disconnect ~5s → su cliente de update **no arranca sin
+    internet real** (ayer en <SSID_CASA> con internet sí avanzó: descarga→extract→reboot).
+- **Falta (próxima sesión)**: NAT en el ESP32 (STA a <SSID_CASA> + reenvío) para darle internet al
+  robot a través nuestro; con eso su flujo avanza y el promiscuo/SNI captura la URL del
+  firmware. Alternativa: panel del TP-Link (DNS del DHCP → nuestra PC).
+
 **UART/bootloader — resolvería todo, requiere abrir el robot:**
 - Todos los ESP32 arrancan por UART0 a 115200; con GPIO0 a GND durante el reset entran a
   **modo download**. Con pads UART0/GPIO0/EN expuestos y un adaptador USB-UART 3.3V:

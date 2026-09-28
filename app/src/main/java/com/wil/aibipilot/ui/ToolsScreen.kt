@@ -41,6 +41,8 @@ import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -1090,6 +1092,45 @@ private val labTemplates = listOf(
     LabTemplate("photo sync", """{"type":"photo_req","data":{"op":"sync","server":{"ip":"TU_IP","port":9090}}}"""),
 )
 
+private data class FactoryAction(
+    val title: String,
+    val from: Int,
+    val to: Int,
+    val message: String,
+    val destructive: Boolean,
+)
+
+private val factoryActions = listOf(
+    FactoryAction(
+        title = "Forzar update/rebuild de fábrica",
+        from = 97,
+        to = 100,
+        message = "Dispara la secuencia de fábrica completa: formatea la SD, reconstruye el sistema y descarga el contenido. ¿Continuar?",
+        destructive = true,
+    ),
+    FactoryAction(
+        title = "Disk mode",
+        from = 24,
+        to = 26,
+        message = "Pone el robot en modo disco y corta el BLE. Solo se sale con los botones físicos (tapa superior). ¿Continuar?",
+        destructive = true,
+    ),
+    FactoryAction(
+        title = "Test head/neck/base",
+        from = 52,
+        to = 53,
+        message = "Ejecuta el test de servos head/neck/base. ¿Continuar?",
+        destructive = false,
+    ),
+    FactoryAction(
+        title = "Test micrófono",
+        from = 85,
+        to = 85,
+        message = "Ejecuta el test de micrófono. ¿Continuar?",
+        destructive = false,
+    ),
+)
+
 @Composable
 private fun LabPane(vm: RobotViewModel, ui: UiState) {
     var editor by rememberSaveable { mutableStateOf("") }
@@ -1097,8 +1138,34 @@ private fun LabPane(vm: RobotViewModel, ui: UiState) {
     var sweepFrom by rememberSaveable { mutableStateOf("0") }
     var sweepTo by rememberSaveable { mutableStateOf("15") }
     var confirmDangerous by remember { mutableStateOf(false) }
+    var factoryConfirm by remember { mutableStateOf<FactoryAction?>(null) }
 
     val dangerousCmds = setOf(24, 25, 26, 97, 98, 99, 100)
+
+    factoryConfirm?.let { action ->
+        AlertDialog(
+            onDismissRequest = { factoryConfirm = null },
+            shape = RoundedCornerShape(16.dp),
+            title = { Text(action.title) },
+            text = { Text(action.message) },
+            confirmButton = {
+                TextButton(onClick = {
+                    factoryConfirm = null
+                    vm.startMotionSweep(action.from, action.to, confirmed = true)
+                }) {
+                    Text(
+                        "Continuar",
+                        color = if (action.destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { factoryConfirm = null }) {
+                    Text("Cancelar", color = TextSecondary)
+                }
+            },
+        )
+    }
 
     if (confirmDangerous) {
         AlertDialog(
@@ -1233,6 +1300,43 @@ private fun LabPane(vm: RobotViewModel, ui: UiState) {
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary,
                 )
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                Text("Acciones de fábrica", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Secuencias ya validadas en vivo. Las destructivas cortan el BLE o reconstruyen el sistema.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
+                Spacer(Modifier.height(8.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    factoryActions.forEach { action ->
+                        if (action.destructive) {
+                            Button(
+                                onClick = { factoryConfirm = action },
+                                enabled = !ui.motionSweeping,
+                                modifier = Modifier.fillMaxWidth().height(44.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error,
+                                    contentColor = MaterialTheme.colorScheme.onError,
+                                ),
+                            ) {
+                                Text(action.title, style = MaterialTheme.typography.labelMedium)
+                            }
+                        } else {
+                            PrimaryButton(
+                                text = action.title,
+                                onClick = { factoryConfirm = action },
+                                enabled = !ui.motionSweeping,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
             }
         }
         item {

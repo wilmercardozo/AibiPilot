@@ -223,6 +223,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private var lastTxAt = 0L
     private var lowBatteryNotified = false
 
+    // Apagado robusto (BUG-1): mientras poweringOff, una desconexión BLE es éxito
+    private var poweringOff = false
+    private var powerOffRequestedAt = 0L
+    private var powerOffJob: kotlinx.coroutines.Job? = null
+
     private val rxEvents = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
         extraBufferCapacity = 64
     )
@@ -440,7 +445,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     firePendingMotion()
                 } else {
-                    if (reconnectCancelled) {
+                    if (poweringOff) {
+                        handlePowerOffDisconnect()
+                    } else if (reconnectCancelled) {
                         _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
                         log(LogCat.SYS, "Se perdió la conexión BLE")
                     } else if (reconnectInFlight || _ui.value.conn == ConnState.CONNECTED) {
@@ -903,10 +910,70 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun powerOff() {
-        ensureMode("setting") {
-            send(Protocol.settingOff(), "Apagar robot")
-            showSnackbar("Apagando robot…")
+        if (_ui.value.conn != ConnState.CONNECTED || poweringOff) return
+        poweringOff = true
+        powerOffRequestedAt = android.os.SystemClock.elapsedRealtime()
+        // 1) off directo, sin exigir modo (BUG-1: ensureMode podía trabarse
+        //    y el off se perdía antes de enviarse)
+        send(Protocol.settingOff(), "Apagar robot")
+        showSnackbar("Apagando robot…")
+        powerOffJob?.cancel()
+        powerOffJob = viewModelScope.launch {
+            val deadline = powerOffRequestedAt + 5000
+            // 2) si a los ~1.5s sigue conectado, un único reintento tras settingIn()
+            kotlinx.coroutines.delay(1500)
+            if (!poweringOff || _ui.value.conn != ConnState.CONNECTED) return@launch
+            log(LogCat.SYS, "Sin desconexión tras 1.5s: reintentando apagado (setting in)")
+            send(Protocol.settingIn(), "setting in (reintento apagado)")
+            val acked = kotlinx.coroutines.withTimeoutOrNull(1500) {
+                modeAckFlow.filter { it == "setting_in_ok" }.first()
+            } != null
+            if (!acked) {
+                kotlinx.coroutines.delay(400)
+                log("Sin ACK de setting_in en el reintento, enviando off igual")
+            }
+            if (!poweringOff || _ui.value.conn != ConnState.CONNECTED) return@launch
+            send(Protocol.settingOff(), "Apagar robot (reintento)")
+            // 3) esperar hasta el timeout total (~5s) por la desconexión de éxito
+            kotlinx.coroutines.delay(
+                (deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(100)
+            )
+            if (!poweringOff || _ui.value.conn != ConnState.CONNECTED) return@launch
+            poweringOff = false
+            log(LogCat.ERR, "El robot no respondió al apagado (sin desconexión BLE)")
+            showSnackbar("No respondió — reintentá o tocá al robot")
         }
+    }
+
+    /**
+     * BUG-1: desconexión BLE con poweringOff activo = el robot se apagó.
+     * No se programa reconexión (robot apagado) y la UI pasa a la pantalla
+     * de conexión con el snackbar "Robot apagado ✓".
+     */
+    private fun handlePowerOffDisconnect() {
+        poweringOff = false
+        powerOffJob?.cancel()
+        powerOffJob = null
+        reconnectCancelled = true
+        reconnectInFlight = false
+        reconnectJob?.cancel()
+        keepAliveJob?.cancel()
+        connectTimeoutJob?.cancel()
+        currentMode = null
+        currentDevice = null
+        _ui.update {
+            it.copy(
+                conn = ConnState.DISCONNECTED,
+                reconnectAttempt = 0,
+                connHint = "Robot apagado ✓",
+                info = RobotInfo(),
+                wifiConnState = WifiConnState.IDLE,
+                robotWifiTarget = null,
+                robotWifiConnected = null
+            )
+        }
+        log(LogCat.SYS, "Robot apagado (desconexión BLE tras el comando off)")
+        showSnackbar("Robot apagado ✓")
     }
 
     fun refreshStatus() {
@@ -1038,6 +1105,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun disconnect() {
+        poweringOff = false
+        powerOffJob?.cancel()
+        powerOffJob = null
         reconnectCancelled = true
         reconnectInFlight = false
         reconnectJob?.cancel()

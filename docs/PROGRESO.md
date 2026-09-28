@@ -124,3 +124,45 @@ de eFuses), con camino concreto de 2-3 pasos. Documento: `docs/FIRMWARE-RESEARCH
 - 5 despachos de research en Herdr (2 flash + 3 pro); 2 excedieron el tope de tiempo del run y
   se recuperaron con wait. Evidencia completa guardada en el workspace (borrado al cerrar; lo
   esencial está en el documento).
+
+## 2026-09-28 — Handoff de Claude + robustez de herramientas
+
+### Resultado (todo mergeado a main, build OK)
+- **Handoff Claude ejecutado** (branch dev/handoff-28sep): WiFi con confirmación automática
+  (WifiConnState + poll query[4]), apagado robusto (reintento + éxito por desconexión ≤3s),
+  header global (conexión+batería+WiFi), patrón `withAck {}` con migración de acciones.
+- **Modo seguro en Laboratorio**: el barrido con comandos peligrosos (24-26, 97-100) pide
+  confirmación; guard en el VM (`confirmed` flag).
+- **Pestaña Diagnóstico**: estado, firmware, batería, pasos/monedas/MTU, arquitectura del robot,
+  contenido SD; luego reforzada con RSSI BLE en vivo, modo actual, último RX, reconexión.
+- **Acciones de fábrica** con botones directos (forzar update 97-100, disk mode 24-26, tests
+  52-53 y 85) — marcadas "observadas en vivo, sin confirmar en fuentes" (la tabla real vive en
+  el firmware del cerebro).
+- **Pestaña Configuración del robot** (builders exactos del decompilado regenerado): idioma 12,
+  24h, unidades, OTA notify, chatty/selfani/tapani/doubletap, wakemodel, quiet, schedule (con
+  fix del campo `switch` — bug ALTA cazado por QA contra el oficial), nombre, cumpleaños.
+- **Laboratorio**: plantillas de todos los settings + resultado del último comando inline.
+- **Logs**: exportar (FileProvider), contador de líneas, toggle auto-scroll.
+
+### Verificado en vivo (robot post-update de firmware)
+- `lang es` → `setting_lang_ok` · `wakemodel 1` → `setting_wakemodel_ok` ✓
+- Fotos: `photo_in_ok` + sync → `photo_sync_no "No photos in AIBI"` (el rebuild vació la SD;
+  flujo OK, falta botón "Tomar foto" con `photo_single` para probar la transferencia real).
+
+### Fuentes extraídas (correcciones al doc de Claude)
+- Comandos SPI reales de los ARM: body = `hoffset/hreoffset/noffset/nreoffset/irda/plow/prps/
+  pota/start/close`; base = `bled/blow/boffset/breoffset/bota/start/close` (Claude puso
+  `led`/`angle` — incorrecto).
+- Módulos del oficial NO mapeados aún (ops reales): buyFood (buyfood/feed), changeLook
+  (buyglass/wearglass), meet (list/add/del/rescan), tarot (shuffle/choose/read), coaster
+  (start/over), friends (messages/list/send…). Candidatos a implementar.
+- Los IDs del motion BLE NO están en ninguna fuente disponible (los sirve el servidor;
+  viven en el cerebro) — los rangos observados son empíricos.
+
+### Pendiente
+- Verificación en vivo completa (config/header/withAck/apagado/export) en la próxima sesión
+  con robot despierto.
+- Botón "Tomar foto" en Fotos (photo_single) para cerrar la transferencia real.
+- Watcher OTA (aviso cuando salga nueva versión) · Hermes real · C5 (gamificación/widget/…).
+- Firmware del cerebro: proceso definido (descargar por MITM → parchear → rehashear con esptool
+  → reinyectar por OTA o UART; sin firma → factible).

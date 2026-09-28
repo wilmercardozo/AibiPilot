@@ -6,6 +6,10 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wil.aibipilot.ble.BleClient
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.wil.aibipilot.ble.BleEvent
 import com.wil.aibipilot.ble.PhotoTcpServer
 import com.wil.aibipilot.ble.RemoteService
@@ -1509,6 +1513,26 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearLog() {
         _ui.update { it.copy(log = emptyList()) }
+    }
+
+    /**
+     * Escribe el log completo a
+     * `<getExternalFilesDir>/logs/aibi_log_<timestamp>.txt` y devuelve el
+     * archivo (o null si falla). El compartido se hace en la UI con
+     * FileProvider (authority `com.wil.aibipilot.fileprovider`).
+     */
+    fun exportLogFile(): File? {
+        return try {
+            val dir = File(getApplication<Application>().getExternalFilesDir(null), "logs")
+            dir.mkdirs()
+            val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val file = File(dir, "aibi_log_$ts.txt")
+            file.writeText(_ui.value.log.joinToString("\n") { "${it.cat.name} ${it.text}" })
+            file
+        } catch (e: Exception) {
+            log(LogCat.ERR, "Error exportando log: ${e.message}")
+            null
+        }
     }
 
     // ------------------------------------------------------------------

@@ -1,5 +1,8 @@
 package com.wil.aibipilot.ui
 
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -36,6 +39,7 @@ import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.TheaterComedy
 import androidx.compose.material.icons.filled.WaterDrop
@@ -79,6 +83,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.FileProvider
 import com.wil.aibipilot.LogCat
 import com.wil.aibipilot.RobotViewModel
 import com.wil.aibipilot.UiState
@@ -97,6 +103,7 @@ import com.wil.aibipilot.ui.theme.TextSecondary
 import com.wil.aibipilot.ui.theme.Warning
 import com.wil.aibipilot.ui.theme.StatusGreen
 import com.wil.aibipilot.ui.theme.ErrorRed
+import kotlinx.coroutines.delay
 
 private enum class ToolTab(val label: String, val icon: ImageVector) {
     LUCES("Luces", Icons.Default.LightMode),
@@ -1980,18 +1987,67 @@ private fun wifiConnStateLabel(state: WifiConnState): String = when (state) {
 // Log BLE
 // ---------------------------------------------------------------------------
 
+private fun exportLog(context: Context, vm: RobotViewModel) {
+    val file = vm.exportLogFile()
+    if (file == null) {
+        Toast.makeText(context, "No se pudo exportar el log", Toast.LENGTH_SHORT).show()
+        return
+    }
+    try {
+        val uri = FileProvider.getUriForFile(context, "com.wil.aibipilot.fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Compartir log BLE"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "Log guardado en ${file.parent}", Toast.LENGTH_LONG).show()
+    }
+}
+
 @Composable
 private fun LogPane(vm: RobotViewModel, ui: UiState) {
+    val context = LocalContext.current
     var filters by remember { mutableStateOf(setOf<LogCat>()) }
+    var autoScroll by rememberSaveable { mutableStateOf(true) }
+    var confirmClear by remember { mutableStateOf(false) }
     val visible = remember(ui.log, filters) {
         ui.log.filter { filters.isEmpty() || it.cat in filters }
     }
     val listState = rememberLazyListState()
-    LaunchedEffect(visible.size) {
-        if (visible.isNotEmpty()) listState.animateScrollToItem(visible.size - 1)
+    LaunchedEffect(visible.size, autoScroll) {
+        if (autoScroll && visible.isNotEmpty()) listState.animateScrollToItem(visible.size - 1)
+    }
+    LaunchedEffect(confirmClear) {
+        if (confirmClear) {
+            delay(3000)
+            confirmClear = false
+        }
     }
 
     Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Log BLE",
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                if (filters.isEmpty()) "${ui.log.size} líneas"
+                else "mostrando ${visible.size} de ${ui.log.size}",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary,
+            )
+            Spacer(Modifier.width(12.dp))
+            Text("Auto-scroll", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+            Switch(
+                checked = autoScroll,
+                onCheckedChange = { autoScroll = it },
+            )
+        }
+        Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Row(
                 Modifier.weight(1f).horizontalScroll(rememberScrollState()),
@@ -2007,8 +2063,24 @@ private fun LogPane(vm: RobotViewModel, ui: UiState) {
                     )
                 }
             }
-            IconButton(onClick = { vm.clearLog() }) {
-                Icon(Icons.Default.Delete, contentDescription = "Limpiar", tint = TextSecondary)
+            IconButton(onClick = { exportLog(context, vm) }) {
+                Icon(Icons.Default.Share, contentDescription = "Exportar", tint = TextSecondary)
+            }
+            IconButton(
+                onClick = {
+                    if (confirmClear) {
+                        vm.clearLog()
+                        confirmClear = false
+                    } else {
+                        confirmClear = true
+                    }
+                },
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = if (confirmClear) "Tocar de nuevo para confirmar" else "Limpiar",
+                    tint = if (confirmClear) Warning else TextSecondary,
+                )
             }
         }
         Spacer(Modifier.height(8.dp))

@@ -1266,8 +1266,14 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------------
     private var motionSweepJob: kotlinx.coroutines.Job? = null
 
-    fun startMotionSweep(from: Int, to: Int) {
+    private val dangerousMotionCmds = setOf(24, 25, 26, 97, 98, 99, 100)
+
+    fun startMotionSweep(from: Int, to: Int, confirmed: Boolean = false) {
         if (from !in 0..255 || to !in 0..255 || from > to) return
+        if (!confirmed && (from..to).any { it in dangerousMotionCmds }) {
+            showSnackbar("El rango incluye comandos de fábrica peligrosos")
+            return
+        }
         if (_ui.value.motionSweeping) return
         motionSweepJob?.cancel()
         _ui.update { it.copy(motionSweeping = true, motionSweepCmd = from) }

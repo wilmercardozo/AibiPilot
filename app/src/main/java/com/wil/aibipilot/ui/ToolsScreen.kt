@@ -641,7 +641,7 @@ private fun ConfigPane(vm: RobotViewModel, ui: UiState) {
                 }
                 if (quietError) {
                     Text(
-                        "Horario inválido: la hora de inicio debe ser anterior a la de fin",
+                        "Horario inválido: usá el formato HH:mm (ej. 22:00). El robot acepta períodos que cruzan medianoche.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -1728,8 +1728,13 @@ private fun LabPane(vm: RobotViewModel, ui: UiState) {
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
-                Text("Acciones de fábrica", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                Text("Acciones de fábrica (observadas en vivo, sin confirmar en fuentes)", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
                 Spacer(Modifier.height(4.dp))
+                Text(
+                    "Los rangos provienen de pruebas empíricas; la tabla oficial vive en el firmware del cerebro (aún no extraído).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
                 Text(
                     "Secuencias ya validadas en vivo. Las destructivas cortan el BLE o reconstruyen el sistema.",
                     style = MaterialTheme.typography.bodySmall,

@@ -114,7 +114,7 @@ object Protocol {
     // selfani/tapani/doubletap/otanotify -> option(int), wakemodel ->
     // model(int), lastname -> name, birthday -> birthday, quiet_add ->
     // from/to (String "HH:MM"), schedule_add -> time(int HHMM)+tag(int),
-    // schedule_switch -> str("on"|"off")
+    // schedule_switch -> switch("on"|"off")
     // ------------------------------------------------------------------
     fun settingLang(langcode: String): ByteArray = request(
         "setting_req",
@@ -254,7 +254,7 @@ object Protocol {
         "setting_req",
         buildJsonObject {
             put("op", "schedule_switch")
-            put("str", if (on) "on" else "off")
+            put("switch", if (on) "on" else "off")
         }.toString()
     )
 

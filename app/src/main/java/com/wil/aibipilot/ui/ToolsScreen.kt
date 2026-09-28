@@ -1851,6 +1851,19 @@ private fun DiagPane(ui: UiState) {
                     StatusPill(ui.conn, ui.reconnectAttempt, ui.connHint)
                 }
                 Spacer(Modifier.height(8.dp))
+                val rssiColor = when {
+                    ui.bleRssi == null -> TextSecondary
+                    ui.bleRssi!! >= -55 -> StatusGreen
+                    ui.bleRssi!! >= -75 -> Warning
+                    else -> MaterialTheme.colorScheme.error
+                }
+                DiagRow("RSSI", ui.bleRssi?.let { "$it dBm" } ?: "—", valueColor = rssiColor)
+                DiagRow("Modo", ui.currentMode ?: "—")
+                DiagRow(
+                    "Último RX",
+                    if (ui.lastRxSeconds >= 0) "hace ${ui.lastRxSeconds}s" else "—",
+                )
+                DiagRow("Reconexión", if (ui.reconnectAttempt > 0) "intento ${ui.reconnectAttempt}" else "—")
                 DiagRow(
                     "Firmware",
                     if (ui.info.version.isNotEmpty())

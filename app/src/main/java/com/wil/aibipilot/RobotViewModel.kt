@@ -179,6 +179,9 @@ data class UiState(
     val wifiConnState: WifiConnState = WifiConnState.IDLE,
     val robotWifiTarget: String? = null,
     val robotWifiConnected: Boolean? = null,
+    val bleRssi: Int? = null,
+    val currentMode: String? = null,
+    val lastRxSeconds: Long = -1L,
     val snackbar: String? = null
 )
 
@@ -220,6 +223,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     private var reconnectJob: kotlinx.coroutines.Job? = null
     private var keepAliveJob: kotlinx.coroutines.Job? = null
+    private var rssiJob: kotlinx.coroutines.Job? = null
+    private var rxTickerJob: kotlinx.coroutines.Job? = null
     private var snackbarNonce = 0
     private var reconnectAttempt = 0
     private var reconnectCancelled = false
@@ -446,6 +451,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                     _ui.update { it.copy(conn = ConnState.CONNECTED) }
                     log("Conectado. MTU: ${ble.currentMtu()}")
                     startKeepAlive()
+                    startRssiLoop()
+                    startRxTicker()
                     viewModelScope.launch {
                         kotlinx.coroutines.delay(1000)
                         handshake()
@@ -494,7 +501,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             it.copy(
                 wifiConnState = WifiConnState.IDLE,
                 robotWifiTarget = null,
-                robotWifiConnected = null
+                robotWifiConnected = null,
+                bleRssi = null
             )
         }
         reconnectAttempt++
@@ -610,6 +618,43 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         send(payload, "handshake sta_req query[1,8,11,12]")
     }
 
+    /**
+     * RSSI en vivo para Diagnóstico: pide el RSSI cada ~5s mientras esté
+     * conectado. Es una lectura local de la radio; no cuenta como tráfico
+     * RX/TX, así que no interfiere con el keep-alive.
+     */
+    private fun startRssiLoop() {
+        rssiJob?.cancel()
+        rssiJob = viewModelScope.launch {
+            while (isActive) {
+                if (_ui.value.conn == ConnState.CONNECTED) {
+                    ble.readRemoteRssi { rssi ->
+                        _ui.update { it.copy(bleRssi = rssi) }
+                    }
+                }
+                kotlinx.coroutines.delay(5000)
+            }
+        }
+    }
+
+    /**
+     * Ticker liviano (~1s): actualiza lastRxSeconds para Diagnóstico solo
+     * mientras la conexión está activa. No toca lastRxAt (lo usa keep-alive).
+     */
+    private fun startRxTicker() {
+        rxTickerJob?.cancel()
+        rxTickerJob = viewModelScope.launch {
+            while (isActive) {
+                if (_ui.value.conn == ConnState.CONNECTED) {
+                    val seconds = if (lastRxAt == 0L) -1L
+                    else (android.os.SystemClock.elapsedRealtime() - lastRxAt) / 1000
+                    _ui.update { it.copy(lastRxSeconds = seconds) }
+                }
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+
     private fun onBleEvent(event: BleEvent) {
         lastRxAt = android.os.SystemClock.elapsedRealtime()
         rxEvents.tryEmit(Unit)
@@ -637,7 +682,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 if (eventName == "modeout") {
                     val evCurrent = root["data"]?.jsonObject?.get("current")?.jsonPrimitive?.contentOrNull
                     if (evCurrent == null || evCurrent == currentMode) {
-                        currentMode = null
+                        setCurrentMode(null)
                         log(LogCat.EVT, "El robot salió del modo de función")
                     } else {
                         log(LogCat.EVT, "modeout de un modo anterior ($evCurrent), ignorado")
@@ -854,6 +899,12 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------------
     private var currentMode: String? = null
 
+    /** Actualiza el modo privado y lo expone en UiState (Diagnóstico). */
+    private fun setCurrentMode(mode: String?) {
+        currentMode = mode
+        _ui.update { it.copy(currentMode = mode) }
+    }
+
     private fun modeIn(mode: String): ByteArray = when (mode) {
         "show" -> Protocol.showIn()
         "light" -> Protocol.lightIn()
@@ -879,7 +930,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             action()
             return
         }
-        currentMode = mode
+        setCurrentMode(mode)
         send(modeIn(mode), "$mode in")
         viewModelScope.launch {
             // esperar el ACK real del robot ("<feature>_in_ok") con timeout
@@ -896,7 +947,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     fun exitCurrentMode() {
         val mode = currentMode ?: return
-        currentMode = null
+        setCurrentMode(null)
         send(modeOut(mode), "$mode out")
     }
 
@@ -1234,7 +1285,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         reconnectJob?.cancel()
         keepAliveJob?.cancel()
         connectTimeoutJob?.cancel()
-        currentMode = null
+        rssiJob?.cancel()
+        rxTickerJob?.cancel()
+        setCurrentMode(null)
         currentDevice = null
         _ui.update {
             it.copy(
@@ -1244,7 +1297,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 info = RobotInfo(),
                 wifiConnState = WifiConnState.IDLE,
                 robotWifiTarget = null,
-                robotWifiConnected = null
+                robotWifiConnected = null,
+                bleRssi = null,
+                lastRxSeconds = -1L
             )
         }
         log(LogCat.SYS, "Robot apagado (desconexión BLE tras el comando off)")
@@ -1259,11 +1314,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     // Alarmas
     // ------------------------------------------------------------------
     fun alarmEnter() {
-        currentMode = "alarm"
+        setCurrentMode("alarm")
         send(Protocol.alarmIn(), "alarm in")
     }
     fun alarmExit() {
-        currentMode = null
+        setCurrentMode(null)
         send(Protocol.alarmOut(), "alarm out")
     }
     fun alarmRefresh() = ensureMode("alarm") { send(Protocol.alarmList(), "alarm list") }
@@ -1288,11 +1343,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     // Luces
     // ------------------------------------------------------------------
     fun lightEnter() {
-        currentMode = "light"
+        setCurrentMode("light")
         send(Protocol.lightIn(), "light in")
     }
     fun lightExit() {
-        currentMode = null
+        setCurrentMode(null)
         send(Protocol.lightOut(), "light out")
     }
     fun lightRefresh() = ensureMode("light") { send(Protocol.lightList(), "light list") }
@@ -1315,11 +1370,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     // Juegos (chess | snake | pirate | zero)
     // ------------------------------------------------------------------
     fun gameEnter(game: String) {
-        currentMode = game
+        setCurrentMode(game)
         send(Protocol.gameIn(game), "$game in")
     }
     fun gameExit(game: String) {
-        currentMode = null
+        setCurrentMode(null)
         send(Protocol.gameOut(game), "$game out")
     }
     fun gameStart(game: String) =
@@ -1331,11 +1386,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     // Fotos (TCP)
     // ------------------------------------------------------------------
     fun photoEnter() {
-        currentMode = "photo"
+        setCurrentMode("photo")
         send(Protocol.photoIn(), "photo in")
     }
     fun photoExit() {
-        currentMode = null
+        setCurrentMode(null)
         send(Protocol.photoOut(), "photo out")
     }
     fun photoShow() = ensureMode("photo") { send(Protocol.photoShow(), "photo show") }
@@ -1401,7 +1456,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         reconnectInFlight = false
         reconnectJob?.cancel()
         keepAliveJob?.cancel()
-        currentMode = null
+        rssiJob?.cancel()
+        rxTickerJob?.cancel()
+        setCurrentMode(null)
         stopPhotoSync()
         ble.disconnect()
         currentDevice = null
@@ -1413,7 +1470,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 info = RobotInfo(),
                 wifiConnState = WifiConnState.IDLE,
                 robotWifiTarget = null,
-                robotWifiConnected = null
+                robotWifiConnected = null,
+                bleRssi = null,
+                lastRxSeconds = -1L
             )
         }
         log(LogCat.SYS, "Desconectado")

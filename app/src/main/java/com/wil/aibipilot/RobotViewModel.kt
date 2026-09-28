@@ -33,6 +33,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -43,6 +44,10 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 enum class ConnState { DISCONNECTED, SCANNING, CONNECTING, CONNECTED, RECONNECTING }
+
+enum class WifiConnState { IDLE, CONNECTING, CONNECTED, FAILED }
+
+data class WifiNet(val ssid: String, val rssi: Int? = null)
 
 data class RobotInfo(
     val deviceName: String = "",
@@ -161,9 +166,12 @@ data class UiState(
     val rawHistory: List<String> = emptyList(),
     val motionSweeping: Boolean = false,
     val motionSweepCmd: Int? = null,
-    val wifiNetworks: List<String> = emptyList(),
+    val wifiNetworks: List<WifiNet> = emptyList(),
     val wifiScanning: Boolean = false,
     val robotWifi: String? = null,
+    val wifiConnState: WifiConnState = WifiConnState.IDLE,
+    val robotWifiTarget: String? = null,
+    val robotWifiConnected: Boolean? = null,
     val snackbar: String? = null
 )
 
@@ -467,6 +475,14 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private fun scheduleReconnect() {
         if (reconnectJob?.isActive == true) return // idempotente: ya hay un intento en curso
         reconnectJob?.cancel()
+        // sin BLE no se puede seguir el estado del WiFi del robot
+        _ui.update {
+            it.copy(
+                wifiConnState = WifiConnState.IDLE,
+                robotWifiTarget = null,
+                robotWifiConnected = null
+            )
+        }
         reconnectAttempt++
         if (reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
             reconnectInFlight = false
@@ -637,17 +653,19 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         // respuesta de wifilist: el formato real se aprende en vivo (lista en "list" o similar)
         if (result.contains("wifilist", ignoreCase = true)) {
             val list = data["list"]?.jsonArray
-            val networks = mutableListOf<String>()
+            val networks = mutableListOf<WifiNet>()
             if (list != null) {
                 for (el in list) {
                     val obj = el as? JsonObject ?: continue
                     val name = obj["name"]?.jsonPrimitive?.contentOrNull
                         ?: obj["ssid"]?.jsonPrimitive?.contentOrNull
-                    if (name != null) networks.add(name)
+                    if (name != null) {
+                        networks.add(WifiNet(name, obj["rssi"]?.jsonPrimitive?.intOrNull))
+                    }
                 }
             }
             _ui.update { it.copy(wifiNetworks = networks, wifiScanning = false) }
-            log(LogCat.RX, "WiFi list: ${networks.joinToString()}")
+            log(LogCat.RX, "WiFi list: ${networks.joinToString { n -> "${n.ssid}(${n.rssi} dBm)" }}")
         }
     }
 
@@ -700,9 +718,25 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             val wifi = data["wifi"]?.jsonObject
             val wifiSsid = wifi?.get("ssid")?.jsonPrimitive?.contentOrNull
                 ?: wifi?.get("name")?.jsonPrimitive?.contentOrNull
+            // formato real observado en vivo: "wifi":{"connected":1,"name":"<ssid>"}
+            val wifiConnected: Boolean? = wifi?.get("connected")?.jsonPrimitive?.let { p ->
+                p.intOrNull?.let { it != 0 } ?: p.booleanOrNull
+            }
             _ui.update { s ->
+                val target = s.robotWifiTarget
+                val targetConnected = target != null && wifiSsid == target &&
+                    (wifiConnected == null || wifiConnected)
+                val wifiState = when (s.wifiConnState) {
+                    WifiConnState.CONNECTING ->
+                        if (targetConnected) WifiConnState.CONNECTED else WifiConnState.CONNECTING
+                    WifiConnState.CONNECTED ->
+                        if (targetConnected) WifiConnState.CONNECTED else WifiConnState.IDLE
+                    else -> s.wifiConnState
+                }
                 s.copy(
                     robotWifi = wifiSsid ?: s.robotWifi,
+                    robotWifiConnected = wifiConnected ?: s.robotWifiConnected,
+                    wifiConnState = wifiState,
                     info = s.info.copy(
                         version = data["version"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull ?: s.info.version,
                         versionNumber = data["version"]?.jsonObject?.get("number")?.jsonPrimitive?.contentOrNull ?: s.info.versionNumber,
@@ -827,9 +861,44 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setRobotWifi(ssid: String, password: String) {
+        if (_ui.value.wifiConnState == WifiConnState.CONNECTING) return
+        _ui.update {
+            it.copy(
+                wifiConnState = WifiConnState.CONNECTING,
+                robotWifiTarget = ssid
+            )
+        }
         ensureMode("setting") {
             send(Protocol.settingWifiSet(ssid, password), "wifi set $ssid")
-            showSnackbar("Conectando al robot a $ssid…")
+        }
+        viewModelScope.launch {
+            // 1) esperar el ACK del wifiset (los ACK del robot tardan varios segundos)
+            val ack = kotlinx.coroutines.withTimeoutOrNull(15000) {
+                modeAckFlow.filter { it == "setting_wifiset_ok" }.first()
+            }
+            if (ack == null) {
+                log(LogCat.ERR, "Sin ACK de wifiset para $ssid, se sigue con el poll")
+            } else {
+                log(LogCat.RX, "wifiset aceptado, polleando estado…")
+            }
+            // 2) poll cada 2s hasta 20s hasta que wifi.ssid == target (o flag connected)
+            repeat(10) {
+                if (_ui.value.wifiConnState != WifiConnState.CONNECTING) return@launch
+                wifiStatus()
+                kotlinx.coroutines.delay(2000)
+                val s = _ui.value
+                if (s.robotWifi == ssid && s.robotWifiConnected != false) {
+                    _ui.update { it.copy(wifiConnState = WifiConnState.CONNECTED) }
+                    log(LogCat.SYS, "Robot conectado a $ssid")
+                    showSnackbar("Robot conectado a $ssid ✓")
+                    return@launch
+                }
+            }
+            if (_ui.value.wifiConnState == WifiConnState.CONNECTING) {
+                _ui.update { it.copy(wifiConnState = WifiConnState.FAILED) }
+                log(LogCat.ERR, "Timeout: el robot no conectó a $ssid")
+                showSnackbar("No se pudo conectar a $ssid")
+            }
         }
     }
 
@@ -982,7 +1051,10 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 conn = ConnState.DISCONNECTED,
                 reconnectAttempt = 0,
                 connHint = null,
-                info = RobotInfo()
+                info = RobotInfo(),
+                wifiConnState = WifiConnState.IDLE,
+                robotWifiTarget = null,
+                robotWifiConnected = null
             )
         }
         log(LogCat.SYS, "Desconectado")

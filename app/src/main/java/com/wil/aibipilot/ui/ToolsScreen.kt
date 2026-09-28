@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -77,6 +78,7 @@ import androidx.compose.ui.unit.dp
 import com.wil.aibipilot.LogCat
 import com.wil.aibipilot.RobotViewModel
 import com.wil.aibipilot.UiState
+import com.wil.aibipilot.WifiConnState
 import com.wil.aibipilot.protocol.Animations
 import com.wil.aibipilot.routines.Routine
 import com.wil.aibipilot.routines.RoutineAction
@@ -88,6 +90,7 @@ import com.wil.aibipilot.ui.theme.TextPrimary
 import com.wil.aibipilot.ui.theme.TextSecondary
 import com.wil.aibipilot.ui.theme.Warning
 import com.wil.aibipilot.ui.theme.StatusGreen
+import com.wil.aibipilot.ui.theme.ErrorRed
 
 private enum class ToolTab(val label: String, val icon: ImageVector) {
     LUCES("Luces", Icons.Default.LightMode),
@@ -789,12 +792,16 @@ private fun WifiPane(vm: RobotViewModel, ui: UiState) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionTitle("Red del robot")
                 LaunchedEffect(Unit) { vm.wifiStatus() }
-                Text(
-                    if (ui.robotWifi != null) "Conectado a: ${ui.robotWifi}"
-                    else "Sin red (o sin datos todavía — tocá el estado para refrescar)",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (ui.robotWifi != null) StatusGreen else TextSecondary,
-                    modifier = Modifier.clickable { vm.wifiStatus() },
+                WifiStatusIndicator(
+                    vm = vm,
+                    ui = ui,
+                    onRetry = {
+                        ui.robotWifiTarget?.let {
+                            selected = it
+                            password = ""
+                            showDialog = true
+                        }
+                    },
                 )
                 Text(
                     "El robot escanea las redes cercanas por BLE. Elegí una y pasale la contraseña.",
@@ -819,14 +826,30 @@ private fun WifiPane(vm: RobotViewModel, ui: UiState) {
         } else {
             ui.wifiNetworks.forEach { net ->
                 AppCard(Modifier.fillMaxWidth().clickable {
-                    selected = net
+                    selected = net.ssid
                     password = ""
                     showDialog = true
                 }) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Wifi, contentDescription = null, tint = TextPrimary)
                         Spacer(Modifier.width(12.dp))
-                        Text(net, style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                        Text(
+                            net.ssid,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = TextPrimary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        net.rssi?.let { rssi ->
+                            Text(
+                                "$rssi dBm",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = when {
+                                    rssi >= -55 -> StatusGreen
+                                    rssi >= -75 -> Warning
+                                    else -> ErrorRed
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -858,6 +881,45 @@ private fun WifiPane(vm: RobotViewModel, ui: UiState) {
             dismissButton = {
                 TextButton(onClick = { showDialog = false }) { Text("Cancelar", color = TextSecondary) }
             },
+        )
+    }
+}
+
+@Composable
+private fun WifiStatusIndicator(vm: RobotViewModel, ui: UiState, onRetry: () -> Unit) {
+    when (ui.wifiConnState) {
+        WifiConnState.CONNECTING -> Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            Text(
+                "Conectando a ${ui.robotWifiTarget ?: "…"}…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary,
+            )
+        }
+        WifiConnState.CONNECTED -> Text(
+            "Conectado a ${ui.robotWifi ?: ui.robotWifiTarget ?: "…"} ✓",
+            style = MaterialTheme.typography.bodyMedium,
+            color = StatusGreen,
+        )
+        WifiConnState.FAILED -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "No se pudo conectar a ${ui.robotWifiTarget ?: "…"} ✗",
+                style = MaterialTheme.typography.bodyMedium,
+                color = ErrorRed,
+            )
+            TextButton(onClick = onRetry) {
+                Text("Reintentar", color = MaterialTheme.colorScheme.primary)
+            }
+        }
+        WifiConnState.IDLE -> Text(
+            if (ui.robotWifi != null) "Conectado a: ${ui.robotWifi}"
+            else "Sin red — tocá para refrescar",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (ui.robotWifi != null) StatusGreen else TextSecondary,
+            modifier = Modifier.clickable { vm.wifiStatus() },
         )
     }
 }

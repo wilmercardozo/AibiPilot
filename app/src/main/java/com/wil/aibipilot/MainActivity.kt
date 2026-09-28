@@ -39,7 +39,7 @@ class MainActivity : ComponentActivity() {
             intent?.getIntExtra(EXTRA_MOTION_CMD, -1)?.let { if (it in 0..255) vm.scheduleMotion(it) }
             intent?.getIntExtra(EXTRA_MOTION_FROM, -1)?.let { from ->
                 intent.getIntExtra(EXTRA_MOTION_TO, -1).let { to ->
-                    if (from in 0..255 && to in from..255) vm.startMotionSweep(from, to)
+                    if (from in 0..255 && to in from..255) vm.startMotionSweep(from, to, confirmed = true)
                 }
             }
         }

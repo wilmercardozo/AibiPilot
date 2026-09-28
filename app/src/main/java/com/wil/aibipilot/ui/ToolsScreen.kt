@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Medication
+import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Restaurant
@@ -79,6 +80,7 @@ import com.wil.aibipilot.LogCat
 import com.wil.aibipilot.RobotViewModel
 import com.wil.aibipilot.UiState
 import com.wil.aibipilot.WifiConnState
+import com.wil.aibipilot.batteryLabel
 import com.wil.aibipilot.protocol.Animations
 import com.wil.aibipilot.routines.Routine
 import com.wil.aibipilot.routines.RoutineAction
@@ -86,6 +88,7 @@ import com.wil.aibipilot.ui.components.AppCard
 import com.wil.aibipilot.ui.components.EmptyState
 import com.wil.aibipilot.ui.components.PrimaryButton
 import com.wil.aibipilot.ui.components.SectionTitle
+import com.wil.aibipilot.ui.components.StatusPill
 import com.wil.aibipilot.ui.theme.TextPrimary
 import com.wil.aibipilot.ui.theme.TextSecondary
 import com.wil.aibipilot.ui.theme.Warning
@@ -100,6 +103,7 @@ private enum class ToolTab(val label: String, val icon: ImageVector) {
     WIFI("WiFi", Icons.Default.Wifi),
     REMOTO("Remoto", Icons.Default.Cloud),
     LABORATORIO("Laboratorio", Icons.Default.Science),
+    DIAGNOSTICO("Diagnóstico", Icons.Default.MonitorHeart),
     LOG("Log BLE", Icons.Default.Terminal),
 }
 
@@ -133,6 +137,7 @@ fun ToolsScreen(vm: RobotViewModel, ui: UiState) {
             ToolTab.WIFI -> WifiPane(vm, ui)
             ToolTab.REMOTO -> RemotePane(vm, ui)
             ToolTab.LABORATORIO -> LabPane(vm, ui)
+            ToolTab.DIAGNOSTICO -> DiagPane(ui)
             ToolTab.LOG -> LogPane(vm, ui)
         }
     }
@@ -1091,6 +1096,38 @@ private fun LabPane(vm: RobotViewModel, ui: UiState) {
     var error by remember { mutableStateOf(false) }
     var sweepFrom by rememberSaveable { mutableStateOf("0") }
     var sweepTo by rememberSaveable { mutableStateOf("15") }
+    var confirmDangerous by remember { mutableStateOf(false) }
+
+    val dangerousCmds = setOf(24, 25, 26, 97, 98, 99, 100)
+
+    if (confirmDangerous) {
+        AlertDialog(
+            onDismissRequest = { confirmDangerous = false },
+            shape = RoundedCornerShape(16.dp),
+            title = { Text("Comandos de fábrica peligrosos") },
+            text = {
+                Text(
+                    "El rango incluye comandos que pueden poner el robot en modo disco (24-26) " +
+                        "o disparar el update/rebuild de fábrica (97-100). ¿Continuar?",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDangerous = false
+                    val from = sweepFrom.toIntOrNull()
+                    val to = sweepTo.toIntOrNull()
+                    if (from != null && to != null) vm.startMotionSweep(from, to, confirmed = true)
+                }) {
+                    Text("Continuar", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDangerous = false }) {
+                    Text("Cancelar", color = TextSecondary)
+                }
+            },
+        )
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1164,7 +1201,13 @@ private fun LabPane(vm: RobotViewModel, ui: UiState) {
                 PrimaryButton(
                     text = "Iniciar barrido",
                     onClick = {
-                        if (from != null && to != null) vm.startMotionSweep(from, to)
+                        if (from != null && to != null) {
+                            if ((from..to).any { it in dangerousCmds }) {
+                                confirmDangerous = true
+                            } else {
+                                vm.startMotionSweep(from, to)
+                            }
+                        }
                     },
                     enabled = rangeValid && !ui.motionSweeping,
                     modifier = Modifier.fillMaxWidth(),
@@ -1254,6 +1297,96 @@ private fun LabPane(vm: RobotViewModel, ui: UiState) {
             )
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnóstico
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun DiagPane(ui: UiState) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Robot")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Conexión", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+                    Spacer(Modifier.width(12.dp))
+                    StatusPill(ui.conn, ui.reconnectAttempt, ui.connHint)
+                }
+                Spacer(Modifier.height(8.dp))
+                DiagRow(
+                    "Firmware",
+                    if (ui.info.version.isNotEmpty())
+                        "${ui.info.version} (build ${ui.info.versionNumber.ifEmpty { "—" }})"
+                    else "—",
+                )
+                val batteryColor = when (ui.info.battery) {
+                    4 -> StatusGreen
+                    2, 3 -> Warning
+                    1 -> MaterialTheme.colorScheme.error
+                    else -> TextSecondary
+                }
+                DiagRow("Batería", batteryLabel(ui.info.battery), valueColor = batteryColor)
+                DiagRow("Pasos", ui.info.steps?.toString() ?: "—")
+                DiagRow("Monedas", ui.info.gold?.toString() ?: "—")
+                DiagRow("MTU", ui.info.mtu.toString())
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("WiFi")
+                DiagRow("Red actual", ui.robotWifi ?: "—")
+                DiagRow("Estado", wifiConnStateLabel(ui.wifiConnState))
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Arquitectura")
+                DiagRow("Cerebro", "ESP32-S3 (BLE + protocolo)")
+                DiagRow("pcam", "ESP32-S3 (cámara/rostro/voz)")
+                DiagRow("body", "STM32 (servos cabeza/cuello)")
+                DiagRow("base", "STM32 (servo base + sensor + LED)")
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Contenido SD")
+                Text(
+                    "Contenido SD v1.7.0 (aibi-sd1.7.0.zip) — descargable desde res-us-east-1.living.ai",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagRow(label: String, value: String, valueColor: Color = TextPrimary) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextSecondary,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+            color = valueColor,
+        )
+    }
+}
+
+private fun wifiConnStateLabel(state: WifiConnState): String = when (state) {
+    WifiConnState.CONNECTING -> "Conectando…"
+    WifiConnState.CONNECTED -> "Conectado"
+    WifiConnState.FAILED -> "Error"
+    WifiConnState.IDLE -> "—"
 }
 
 // ---------------------------------------------------------------------------

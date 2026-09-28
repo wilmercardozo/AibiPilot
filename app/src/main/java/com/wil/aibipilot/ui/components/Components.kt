@@ -20,14 +20,19 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.wil.aibipilot.ConnState
 import com.wil.aibipilot.ui.theme.TextPrimary
@@ -68,6 +73,52 @@ fun StatusPill(conn: ConnState, reconnectAttempt: Int, connHint: String?) {
             text = "$glyph $label",
             style = MaterialTheme.typography.labelMedium,
             color = color,
+        )
+    }
+}
+
+/**
+ * Chip de estado del header (DESIGN.md §1.3): pill de 28dp con fondo 20% alpha,
+ * texto `labelMedium` y, opcionalmente, icono o spinner chico. `contentDescription`
+ * opcional para accesibilidad (mergea la semántica de todo el chip).
+ */
+@Composable
+fun StatusChip(
+    label: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    showSpinner: Boolean = false,
+    contentDescription: String? = null,
+) {
+    val a11y = if (contentDescription != null) {
+        Modifier.semantics(mergeDescendants = true) { this.contentDescription = contentDescription }
+    } else Modifier
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .height(28.dp)
+            .background(color = color.copy(alpha = 0.20f), shape = RoundedCornerShape(999.dp))
+            .padding(horizontal = 12.dp)
+            .then(a11y),
+    ) {
+        if (showSpinner) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(12.dp),
+                strokeWidth = 2.dp,
+                color = color,
+            )
+            Spacer(Modifier.width(6.dp))
+        } else if (icon != null) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

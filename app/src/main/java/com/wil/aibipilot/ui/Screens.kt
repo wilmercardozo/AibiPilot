@@ -3,6 +3,7 @@ package com.wil.aibipilot.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,12 +14,19 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Battery2Bar
+import androidx.compose.material.icons.filled.Battery4Bar
+import androidx.compose.material.icons.filled.Battery5Bar
+import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.BatteryUnknown
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -48,9 +56,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.wil.aibipilot.ConnState
 import com.wil.aibipilot.RobotViewModel
 import com.wil.aibipilot.UiState
+import com.wil.aibipilot.WifiConnState
+import com.wil.aibipilot.batteryLabel
+import com.wil.aibipilot.ui.components.StatusChip
 import com.wil.aibipilot.ui.components.StatusPill
 import com.wil.aibipilot.ui.theme.TextPrimary
 import com.wil.aibipilot.ui.theme.TextSecondary
+import com.wil.aibipilot.ui.theme.Warning
 
 enum class Destination(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
     INICIO("Inicio", Icons.Default.Home),
@@ -202,26 +214,87 @@ private fun ConnectedHeader(vm: RobotViewModel, ui: UiState) {
             }
         )
     }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text(
-            "AIBI Pilot",
-            style = MaterialTheme.typography.titleLarge,
-            color = TextPrimary,
-            modifier = Modifier.weight(1f)
-        )
-        StatusPill(ui.conn, ui.reconnectAttempt, ui.connHint)
-        Spacer(Modifier.width(4.dp))
-        IconButton(onClick = { showTheme = true }) {
-            Icon(Icons.Default.Settings, contentDescription = "Apariencia")
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "AIBI Pilot",
+                style = MaterialTheme.typography.titleLarge,
+                color = TextPrimary,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = { showTheme = true }) {
+                Icon(Icons.Default.Settings, contentDescription = "Apariencia")
+            }
+            IconButton(onClick = { showPowerOff = true }) {
+                Icon(Icons.Default.PowerSettingsNew, contentDescription = "Apagar robot")
+            }
+            TextButton(onClick = { vm.disconnect() }) {
+                Text("Desconectar", color = TextSecondary)
+            }
         }
-        IconButton(onClick = { showPowerOff = true }) {
-            Icon(Icons.Default.PowerSettingsNew, contentDescription = "Apagar robot")
-        }
-        TextButton(onClick = { vm.disconnect() }) {
-            Text("Desconectar", color = TextSecondary)
-        }
+        Spacer(Modifier.height(8.dp))
+        StatusBand(ui)
     }
+}
+
+/**
+ * Banda global de estado (conexión + batería + WiFi del robot). Visible en el
+ * header conectado y en el wizard (Screens.kt / ConnectScreen.kt).
+ */
+@Composable
+fun StatusBand(ui: UiState, modifier: Modifier = Modifier) {
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        StatusPill(ui.conn, ui.reconnectAttempt, ui.connHint)
+        BatteryChip(ui.info.battery)
+        WifiChip(ui.robotWifi, ui.wifiConnState, ui.robotWifiTarget)
+    }
+}
+
+@Composable
+private fun BatteryChip(level: Int?) {
+    val color = when {
+        level == null -> TextSecondary
+        level <= 2 -> MaterialTheme.colorScheme.error
+        level == 3 -> Warning
+        else -> MaterialTheme.colorScheme.secondary
+    }
+    val icon = when (level) {
+        1 -> Icons.Default.Battery2Bar
+        2 -> Icons.Default.Battery4Bar
+        3 -> Icons.Default.Battery5Bar
+        4 -> Icons.Default.BatteryFull
+        else -> Icons.Default.BatteryUnknown
+    }
+    StatusChip(
+        label = batteryLabel(level),
+        color = color,
+        icon = icon,
+        contentDescription = "Batería del robot: ${batteryLabel(level)}",
+    )
+}
+
+@Composable
+private fun WifiChip(ssid: String?, state: WifiConnState, target: String?) {
+    val label = when (state) {
+        WifiConnState.CONNECTING -> "Conectando a ${target ?: "…"}…"
+        WifiConnState.FAILED -> target ?: ssid ?: "—"
+        else -> ssid ?: "—"
+    }
+    val color = when {
+        state == WifiConnState.CONNECTING -> Warning
+        state == WifiConnState.FAILED -> MaterialTheme.colorScheme.error
+        ssid != null -> MaterialTheme.colorScheme.secondary
+        else -> TextSecondary
+    }
+    StatusChip(
+        label = label,
+        color = color,
+        icon = if (ssid == null && state == WifiConnState.IDLE) Icons.Default.WifiOff else Icons.Default.Wifi,
+        showSpinner = state == WifiConnState.CONNECTING,
+        contentDescription = "WiFi del robot: $label",
+    )
 }

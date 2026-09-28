@@ -33,6 +33,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -43,6 +44,10 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 enum class ConnState { DISCONNECTED, SCANNING, CONNECTING, CONNECTED, RECONNECTING }
+
+enum class WifiConnState { IDLE, CONNECTING, CONNECTED, FAILED }
+
+data class WifiNet(val ssid: String, val rssi: Int? = null)
 
 data class RobotInfo(
     val deviceName: String = "",
@@ -161,9 +166,12 @@ data class UiState(
     val rawHistory: List<String> = emptyList(),
     val motionSweeping: Boolean = false,
     val motionSweepCmd: Int? = null,
-    val wifiNetworks: List<String> = emptyList(),
+    val wifiNetworks: List<WifiNet> = emptyList(),
     val wifiScanning: Boolean = false,
     val robotWifi: String? = null,
+    val wifiConnState: WifiConnState = WifiConnState.IDLE,
+    val robotWifiTarget: String? = null,
+    val robotWifiConnected: Boolean? = null,
     val snackbar: String? = null
 )
 
@@ -214,6 +222,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private var lastRxAt = 0L
     private var lastTxAt = 0L
     private var lowBatteryNotified = false
+
+    // Apagado robusto (BUG-1): mientras poweringOff, una desconexión BLE es éxito
+    private var poweringOff = false
+    private var powerOffRequestedAt = 0L
+    private var powerOffJob: kotlinx.coroutines.Job? = null
 
     private val rxEvents = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
         extraBufferCapacity = 64
@@ -432,7 +445,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     firePendingMotion()
                 } else {
-                    if (reconnectCancelled) {
+                    if (poweringOff) {
+                        handlePowerOffDisconnect()
+                    } else if (reconnectCancelled) {
                         _ui.update { it.copy(conn = ConnState.DISCONNECTED) }
                         log(LogCat.SYS, "Se perdió la conexión BLE")
                     } else if (reconnectInFlight || _ui.value.conn == ConnState.CONNECTED) {
@@ -467,6 +482,14 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private fun scheduleReconnect() {
         if (reconnectJob?.isActive == true) return // idempotente: ya hay un intento en curso
         reconnectJob?.cancel()
+        // sin BLE no se puede seguir el estado del WiFi del robot
+        _ui.update {
+            it.copy(
+                wifiConnState = WifiConnState.IDLE,
+                robotWifiTarget = null,
+                robotWifiConnected = null
+            )
+        }
         reconnectAttempt++
         if (reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
             reconnectInFlight = false
@@ -637,23 +660,27 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         // respuesta de wifilist: el formato real se aprende en vivo (lista en "list" o similar)
         if (result.contains("wifilist", ignoreCase = true)) {
             val list = data["list"]?.jsonArray
-            val networks = mutableListOf<String>()
+            val networks = mutableListOf<WifiNet>()
             if (list != null) {
                 for (el in list) {
                     val obj = el as? JsonObject ?: continue
                     val name = obj["name"]?.jsonPrimitive?.contentOrNull
                         ?: obj["ssid"]?.jsonPrimitive?.contentOrNull
-                    if (name != null) networks.add(name)
+                    if (name != null) {
+                        networks.add(WifiNet(name, obj["rssi"]?.jsonPrimitive?.intOrNull))
+                    }
                 }
             }
             _ui.update { it.copy(wifiNetworks = networks, wifiScanning = false) }
-            log(LogCat.RX, "WiFi list: ${networks.joinToString()}")
+            log(LogCat.RX, "WiFi list: ${networks.joinToString { n -> "${n.ssid}(${n.rssi} dBm)" }}")
         }
     }
 
     private fun parseAlarmRsp(root: JsonObject) {
         val data = root["data"]?.jsonObject ?: return
-        val result = data["result"]?.jsonPrimitive?.contentOrNull
+        val result = data["result"]?.jsonPrimitive?.contentOrNull ?: return
+        // feedback con ACK: alarm_add_ok/no, alarm_del_ok/no, alarm_list_ok…
+        modeAckFlow.tryEmit(result)
         when (result) {
             "alarm_list_ok" -> {
                 val list = data["list"]?.jsonArray ?: return
@@ -675,7 +702,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun parseLightRsp(root: JsonObject) {
         val data = root["data"]?.jsonObject ?: return
-        val result = data["result"]?.jsonPrimitive?.contentOrNull
+        val result = data["result"]?.jsonPrimitive?.contentOrNull ?: return
+        // feedback con ACK: light_on_ok/no, light_off_ok/no, light_list_ok…
+        modeAckFlow.tryEmit(result)
         when (result) {
             "light_list_ok" -> {
                 val list = data["list"]?.jsonArray ?: return
@@ -700,9 +729,25 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             val wifi = data["wifi"]?.jsonObject
             val wifiSsid = wifi?.get("ssid")?.jsonPrimitive?.contentOrNull
                 ?: wifi?.get("name")?.jsonPrimitive?.contentOrNull
+            // formato real observado en vivo: "wifi":{"connected":1,"name":"<ssid>"}
+            val wifiConnected: Boolean? = wifi?.get("connected")?.jsonPrimitive?.let { p ->
+                p.intOrNull?.let { it != 0 } ?: p.booleanOrNull
+            }
             _ui.update { s ->
+                val target = s.robotWifiTarget
+                val targetConnected = target != null && wifiSsid == target &&
+                    (wifiConnected == null || wifiConnected)
+                val wifiState = when (s.wifiConnState) {
+                    WifiConnState.CONNECTING ->
+                        if (targetConnected) WifiConnState.CONNECTED else WifiConnState.CONNECTING
+                    WifiConnState.CONNECTED ->
+                        if (targetConnected) WifiConnState.CONNECTED else WifiConnState.IDLE
+                    else -> s.wifiConnState
+                }
                 s.copy(
                     robotWifi = wifiSsid ?: s.robotWifi,
+                    robotWifiConnected = wifiConnected ?: s.robotWifiConnected,
+                    wifiConnState = wifiState,
                     info = s.info.copy(
                         version = data["version"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull ?: s.info.version,
                         versionNumber = data["version"]?.jsonObject?.get("number")?.jsonPrimitive?.contentOrNull ?: s.info.versionNumber,
@@ -809,11 +854,46 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         send(modeOut(mode), "$mode out")
     }
 
+    /**
+     * Patrón de feedback con ACK (tarea 4): ejecuta [block] (envío del
+     * comando) y espera en modeAckFlow el result "<expect>_ok" o
+     * "<expect>_no" con timeout. Devuelve true solo si llegó el ACK
+     * positivo; si llega "<expect>_no" devuelve false sin esperar el
+     * timeout, igual que si no llega nada.
+     * Ej.: withAck("setting_volume") { send(Protocol.settingVolume(..)) }
+     */
+    suspend fun withAck(expect: String, timeoutMs: Long = 8000, block: suspend () -> Unit): Boolean {
+        block()
+        val result = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            modeAckFlow.filter { it == "${expect}_ok" || it == "${expect}_no" }.first()
+        }
+        return result == "${expect}_ok"
+    }
+
+    /**
+     * Acción con feedback pendiente→ok→error vía withAck: muestra el
+     * snackbar de éxito si el robot confirmó, o "No respondió…" ante
+     * un "_no" o timeout.
+     */
+    private fun runAcked(expect: String, okMsg: String, block: suspend () -> Unit) {
+        viewModelScope.launch {
+            val ok = withAck(expect) { block() }
+            if (ok) {
+                showSnackbar(okMsg)
+            } else {
+                log(LogCat.ERR, "Sin ACK de $expect (o respuesta negativa)")
+                showSnackbar("No respondió…")
+            }
+        }
+    }
+
     fun setVolume(level: String) {
         _ui.update { it.copy(volume = level) }
+        showSnackbar("Enviando volumen…")
         ensureMode("setting") {
-            send(Protocol.settingVolume(level), "Volumen: $level")
-            showSnackbar("Volumen ok")
+            runAcked("setting_volume", "Volumen ok") {
+                send(Protocol.settingVolume(level), "Volumen: $level")
+            }
         }
     }
 
@@ -827,17 +907,117 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setRobotWifi(ssid: String, password: String) {
+        if (_ui.value.wifiConnState == WifiConnState.CONNECTING) return
+        _ui.update {
+            it.copy(
+                wifiConnState = WifiConnState.CONNECTING,
+                robotWifiTarget = ssid
+            )
+        }
         ensureMode("setting") {
             send(Protocol.settingWifiSet(ssid, password), "wifi set $ssid")
-            showSnackbar("Conectando al robot a $ssid…")
+        }
+        viewModelScope.launch {
+            // 1) esperar el ACK del wifiset (los ACK del robot tardan varios segundos)
+            val ack = kotlinx.coroutines.withTimeoutOrNull(15000) {
+                modeAckFlow.filter { it == "setting_wifiset_ok" }.first()
+            }
+            if (ack == null) {
+                log(LogCat.ERR, "Sin ACK de wifiset para $ssid, se sigue con el poll")
+            } else {
+                log(LogCat.RX, "wifiset aceptado, polleando estado…")
+            }
+            // 2) poll cada 2s hasta 20s hasta que wifi.ssid == target (o flag connected)
+            repeat(10) {
+                if (_ui.value.wifiConnState != WifiConnState.CONNECTING) return@launch
+                wifiStatus()
+                kotlinx.coroutines.delay(2000)
+                val s = _ui.value
+                if (s.robotWifi == ssid && s.robotWifiConnected != false) {
+                    _ui.update { it.copy(wifiConnState = WifiConnState.CONNECTED) }
+                    log(LogCat.SYS, "Robot conectado a $ssid")
+                    showSnackbar("Robot conectado a $ssid ✓")
+                    return@launch
+                }
+            }
+            if (_ui.value.wifiConnState == WifiConnState.CONNECTING) {
+                _ui.update { it.copy(wifiConnState = WifiConnState.FAILED) }
+                log(LogCat.ERR, "Timeout: el robot no conectó a $ssid")
+                showSnackbar("No se pudo conectar a $ssid")
+            }
         }
     }
 
     fun powerOff() {
-        ensureMode("setting") {
-            send(Protocol.settingOff(), "Apagar robot")
-            showSnackbar("Apagando robot…")
+        if (_ui.value.conn != ConnState.CONNECTED || poweringOff) return
+        poweringOff = true
+        powerOffRequestedAt = android.os.SystemClock.elapsedRealtime()
+        // 1) off directo, sin exigir modo (BUG-1: ensureMode podía trabarse
+        //    y el off se perdía antes de enviarse)
+        send(Protocol.settingOff(), "Apagar robot")
+        showSnackbar("Apagando robot…")
+        powerOffJob?.cancel()
+        powerOffJob = viewModelScope.launch {
+            val deadline = powerOffRequestedAt + 5000
+            // 2) si el robot confirma con "setting_off_ok", el comando fue
+            //    aceptado: no reintenta, solo espera la desconexión de éxito.
+            //    Sin ACK ni desconexión en ~1.5s → un único reintento tras settingIn()
+            val offOk = withAck("setting_off", 1500) { /* ya enviado arriba */ }
+            if (offOk) log(LogCat.RX, "Apagado aceptado (setting_off_ok)")
+            if (!poweringOff || _ui.value.conn != ConnState.CONNECTED) return@launch
+            if (!offOk) {
+                log(LogCat.SYS, "Sin desconexión tras 1.5s: reintentando apagado (setting in)")
+                send(Protocol.settingIn(), "setting in (reintento apagado)")
+                val acked = kotlinx.coroutines.withTimeoutOrNull(1500) {
+                    modeAckFlow.filter { it == "setting_in_ok" }.first()
+                } != null
+                if (!acked) {
+                    kotlinx.coroutines.delay(400)
+                    log("Sin ACK de setting_in en el reintento, enviando off igual")
+                }
+                if (!poweringOff || _ui.value.conn != ConnState.CONNECTED) return@launch
+                send(Protocol.settingOff(), "Apagar robot (reintento)")
+            }
+            // 3) esperar hasta el timeout total (~5s) por la desconexión de éxito
+            kotlinx.coroutines.delay(
+                (deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(100)
+            )
+            if (!poweringOff || _ui.value.conn != ConnState.CONNECTED) return@launch
+            poweringOff = false
+            log(LogCat.ERR, "El robot no respondió al apagado (sin desconexión BLE)")
+            showSnackbar("No respondió — reintentá o tocá al robot")
         }
+    }
+
+    /**
+     * BUG-1: desconexión BLE con poweringOff activo = el robot se apagó.
+     * No se programa reconexión (robot apagado) y la UI pasa a la pantalla
+     * de conexión con el snackbar "Robot apagado ✓".
+     */
+    private fun handlePowerOffDisconnect() {
+        poweringOff = false
+        powerOffJob?.cancel()
+        powerOffJob = null
+        reconnectCancelled = true
+        reconnectInFlight = false
+        reconnectJob?.cancel()
+        keepAliveJob?.cancel()
+        connectTimeoutJob?.cancel()
+        currentMode = null
+        currentDevice = null
+        _ui.update {
+            it.copy(
+                conn = ConnState.DISCONNECTED,
+                reconnectAttempt = 0,
+                connHint = "Robot apagado ✓",
+                info = RobotInfo(),
+                wifiConnState = WifiConnState.IDLE,
+                robotWifiTarget = null,
+                robotWifiConnected = null
+            )
+        }
+        log(LogCat.SYS, "Robot apagado (desconexión BLE tras el comando off)")
+        showSnackbar("Robot apagado ✓")
     }
 
     fun refreshStatus() {
@@ -856,16 +1036,22 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         send(Protocol.alarmOut(), "alarm out")
     }
     fun alarmRefresh() = ensureMode("alarm") { send(Protocol.alarmList(), "alarm list") }
-    fun alarmAdd(index: Int, time: String) =
+    fun alarmAdd(index: Int, time: String) {
+        showSnackbar("Enviando alarma…")
         ensureMode("alarm") {
-            send(Protocol.alarmAdd(index, time), "alarm add #$index $time")
-            showSnackbar("Alarma agregada")
+            runAcked("alarm_add", "Alarma agregada") {
+                send(Protocol.alarmAdd(index, time), "alarm add #$index $time")
+            }
         }
-    fun alarmDel(index: Int) =
+    }
+    fun alarmDel(index: Int) {
+        showSnackbar("Enviando eliminación…")
         ensureMode("alarm") {
-            send(Protocol.alarmDel(index), "alarm del #$index")
-            showSnackbar("Alarma eliminada")
+            runAcked("alarm_del", "Alarma eliminada") {
+                send(Protocol.alarmDel(index), "alarm del #$index")
+            }
         }
+    }
 
     // ------------------------------------------------------------------
     // Luces
@@ -879,8 +1065,16 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         send(Protocol.lightOut(), "light out")
     }
     fun lightRefresh() = ensureMode("light") { send(Protocol.lightList(), "light list") }
-    fun lightOn(id: Int = 0) = ensureMode("light") { send(Protocol.lightOn(id), "light on #$id") }
-    fun lightOff(id: Int = 0) = ensureMode("light") { send(Protocol.lightOff(id), "light off #$id") }
+    fun lightOn(id: Int = 0) = ensureMode("light") {
+        runAcked("light_on", "Luz prendida") {
+            send(Protocol.lightOn(id), "light on #$id")
+        }
+    }
+    fun lightOff(id: Int = 0) = ensureMode("light") {
+        runAcked("light_off", "Luz apagada") {
+            send(Protocol.lightOff(id), "light off #$id")
+        }
+    }
     fun lightSet(mode: String, color: List<Int>, brightness: Int) =
         ensureMode("light") {
             send(Protocol.lightSet(0, mode, color, brightness), "light set $mode $color @$brightness")
@@ -969,6 +1163,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun disconnect() {
+        poweringOff = false
+        powerOffJob?.cancel()
+        powerOffJob = null
         reconnectCancelled = true
         reconnectInFlight = false
         reconnectJob?.cancel()
@@ -982,7 +1179,10 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 conn = ConnState.DISCONNECTED,
                 reconnectAttempt = 0,
                 connHint = null,
-                info = RobotInfo()
+                info = RobotInfo(),
+                wifiConnState = WifiConnState.IDLE,
+                robotWifiTarget = null,
+                robotWifiConnected = null
             )
         }
         log(LogCat.SYS, "Desconectado")

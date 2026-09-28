@@ -130,7 +130,9 @@ fun ConnectScreen(vm: RobotViewModel, ui: UiState, modifier: Modifier = Modifier
             style = MaterialTheme.typography.bodyMedium,
             color = TextSecondary
         )
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(16.dp))
+        StatusBand(ui)
+        Spacer(Modifier.height(16.dp))
 
         if (!hasPerms) {
             AppCard(Modifier.fillMaxWidth()) {

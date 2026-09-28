@@ -678,7 +678,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun parseAlarmRsp(root: JsonObject) {
         val data = root["data"]?.jsonObject ?: return
-        val result = data["result"]?.jsonPrimitive?.contentOrNull
+        val result = data["result"]?.jsonPrimitive?.contentOrNull ?: return
+        // feedback con ACK: alarm_add_ok/no, alarm_del_ok/no, alarm_list_ok…
+        modeAckFlow.tryEmit(result)
         when (result) {
             "alarm_list_ok" -> {
                 val list = data["list"]?.jsonArray ?: return
@@ -700,7 +702,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun parseLightRsp(root: JsonObject) {
         val data = root["data"]?.jsonObject ?: return
-        val result = data["result"]?.jsonPrimitive?.contentOrNull
+        val result = data["result"]?.jsonPrimitive?.contentOrNull ?: return
+        // feedback con ACK: light_on_ok/no, light_off_ok/no, light_list_ok…
+        modeAckFlow.tryEmit(result)
         when (result) {
             "light_list_ok" -> {
                 val list = data["list"]?.jsonArray ?: return
@@ -850,11 +854,46 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         send(modeOut(mode), "$mode out")
     }
 
+    /**
+     * Patrón de feedback con ACK (tarea 4): ejecuta [block] (envío del
+     * comando) y espera en modeAckFlow el result "<expect>_ok" o
+     * "<expect>_no" con timeout. Devuelve true solo si llegó el ACK
+     * positivo; si llega "<expect>_no" devuelve false sin esperar el
+     * timeout, igual que si no llega nada.
+     * Ej.: withAck("setting_volume") { send(Protocol.settingVolume(..)) }
+     */
+    suspend fun withAck(expect: String, timeoutMs: Long = 8000, block: suspend () -> Unit): Boolean {
+        block()
+        val result = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            modeAckFlow.filter { it == "${expect}_ok" || it == "${expect}_no" }.first()
+        }
+        return result == "${expect}_ok"
+    }
+
+    /**
+     * Acción con feedback pendiente→ok→error vía withAck: muestra el
+     * snackbar de éxito si el robot confirmó, o "No respondió…" ante
+     * un "_no" o timeout.
+     */
+    private fun runAcked(expect: String, okMsg: String, block: suspend () -> Unit) {
+        viewModelScope.launch {
+            val ok = withAck(expect) { block() }
+            if (ok) {
+                showSnackbar(okMsg)
+            } else {
+                log(LogCat.ERR, "Sin ACK de $expect (o respuesta negativa)")
+                showSnackbar("No respondió…")
+            }
+        }
+    }
+
     fun setVolume(level: String) {
         _ui.update { it.copy(volume = level) }
+        showSnackbar("Enviando volumen…")
         ensureMode("setting") {
-            send(Protocol.settingVolume(level), "Volumen: $level")
-            showSnackbar("Volumen ok")
+            runAcked("setting_volume", "Volumen ok") {
+                send(Protocol.settingVolume(level), "Volumen: $level")
+            }
         }
     }
 
@@ -920,20 +959,25 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         powerOffJob?.cancel()
         powerOffJob = viewModelScope.launch {
             val deadline = powerOffRequestedAt + 5000
-            // 2) si a los ~1.5s sigue conectado, un único reintento tras settingIn()
-            kotlinx.coroutines.delay(1500)
+            // 2) si el robot confirma con "setting_off_ok", el comando fue
+            //    aceptado: no reintenta, solo espera la desconexión de éxito.
+            //    Sin ACK ni desconexión en ~1.5s → un único reintento tras settingIn()
+            val offOk = withAck("setting_off", 1500) { /* ya enviado arriba */ }
+            if (offOk) log(LogCat.RX, "Apagado aceptado (setting_off_ok)")
             if (!poweringOff || _ui.value.conn != ConnState.CONNECTED) return@launch
-            log(LogCat.SYS, "Sin desconexión tras 1.5s: reintentando apagado (setting in)")
-            send(Protocol.settingIn(), "setting in (reintento apagado)")
-            val acked = kotlinx.coroutines.withTimeoutOrNull(1500) {
-                modeAckFlow.filter { it == "setting_in_ok" }.first()
-            } != null
-            if (!acked) {
-                kotlinx.coroutines.delay(400)
-                log("Sin ACK de setting_in en el reintento, enviando off igual")
+            if (!offOk) {
+                log(LogCat.SYS, "Sin desconexión tras 1.5s: reintentando apagado (setting in)")
+                send(Protocol.settingIn(), "setting in (reintento apagado)")
+                val acked = kotlinx.coroutines.withTimeoutOrNull(1500) {
+                    modeAckFlow.filter { it == "setting_in_ok" }.first()
+                } != null
+                if (!acked) {
+                    kotlinx.coroutines.delay(400)
+                    log("Sin ACK de setting_in en el reintento, enviando off igual")
+                }
+                if (!poweringOff || _ui.value.conn != ConnState.CONNECTED) return@launch
+                send(Protocol.settingOff(), "Apagar robot (reintento)")
             }
-            if (!poweringOff || _ui.value.conn != ConnState.CONNECTED) return@launch
-            send(Protocol.settingOff(), "Apagar robot (reintento)")
             // 3) esperar hasta el timeout total (~5s) por la desconexión de éxito
             kotlinx.coroutines.delay(
                 (deadline - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(100)
@@ -992,16 +1036,22 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         send(Protocol.alarmOut(), "alarm out")
     }
     fun alarmRefresh() = ensureMode("alarm") { send(Protocol.alarmList(), "alarm list") }
-    fun alarmAdd(index: Int, time: String) =
+    fun alarmAdd(index: Int, time: String) {
+        showSnackbar("Enviando alarma…")
         ensureMode("alarm") {
-            send(Protocol.alarmAdd(index, time), "alarm add #$index $time")
-            showSnackbar("Alarma agregada")
+            runAcked("alarm_add", "Alarma agregada") {
+                send(Protocol.alarmAdd(index, time), "alarm add #$index $time")
+            }
         }
-    fun alarmDel(index: Int) =
+    }
+    fun alarmDel(index: Int) {
+        showSnackbar("Enviando eliminación…")
         ensureMode("alarm") {
-            send(Protocol.alarmDel(index), "alarm del #$index")
-            showSnackbar("Alarma eliminada")
+            runAcked("alarm_del", "Alarma eliminada") {
+                send(Protocol.alarmDel(index), "alarm del #$index")
+            }
         }
+    }
 
     // ------------------------------------------------------------------
     // Luces
@@ -1015,8 +1065,16 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         send(Protocol.lightOut(), "light out")
     }
     fun lightRefresh() = ensureMode("light") { send(Protocol.lightList(), "light list") }
-    fun lightOn(id: Int = 0) = ensureMode("light") { send(Protocol.lightOn(id), "light on #$id") }
-    fun lightOff(id: Int = 0) = ensureMode("light") { send(Protocol.lightOff(id), "light off #$id") }
+    fun lightOn(id: Int = 0) = ensureMode("light") {
+        runAcked("light_on", "Luz prendida") {
+            send(Protocol.lightOn(id), "light on #$id")
+        }
+    }
+    fun lightOff(id: Int = 0) = ensureMode("light") {
+        runAcked("light_off", "Luz apagada") {
+            send(Protocol.lightOff(id), "light off #$id")
+        }
+    }
     fun lightSet(mode: String, color: List<Int>, brightness: Int) =
         ensureMode("light") {
             send(Protocol.lightSet(0, mode, color, brightness), "light set $mode $color @$brightness")

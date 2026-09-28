@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.TheaterComedy
 import androidx.compose.material.icons.filled.WaterDrop
@@ -100,6 +101,7 @@ import com.wil.aibipilot.ui.theme.ErrorRed
 private enum class ToolTab(val label: String, val icon: ImageVector) {
     LUCES("Luces", Icons.Default.LightMode),
     ALARMAS("Alarmas", Icons.Default.AccessAlarm),
+    CONFIG("Configuración", Icons.Default.Settings),
     RUTINAS("Rutinas", Icons.Default.Schedule),
     FOTOS("Fotos", Icons.Default.PhotoCamera),
     WIFI("WiFi", Icons.Default.Wifi),
@@ -134,6 +136,7 @@ fun ToolsScreen(vm: RobotViewModel, ui: UiState) {
         when (tab) {
             ToolTab.LUCES -> LightsPane(vm, ui)
             ToolTab.ALARMAS -> AlarmsPane(vm, ui)
+            ToolTab.CONFIG -> ConfigPane(vm, ui)
             ToolTab.RUTINAS -> RoutinesPane(vm, ui)
             ToolTab.FOTOS -> PhotosPane(vm, ui)
             ToolTab.WIFI -> WifiPane(vm, ui)
@@ -387,6 +390,427 @@ private fun AlarmsPane(vm: RobotViewModel, ui: UiState) {
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Configuración del robot (settings oficiales)
+// ---------------------------------------------------------------------------
+
+private val langOptions = listOf(
+    "en" to "English",
+    "de" to "Deutsch",
+    "es" to "Español",
+    "fr" to "Français",
+    "it" to "Italiano",
+    "ja" to "日本語",
+    "ko" to "한국어",
+    "pt" to "Português",
+    "zh-CN" to "中文",
+    "ru" to "Русский",
+    "nl" to "Nederlands",
+    "pl" to "Polski",
+)
+
+private val scheduleTags = listOf(
+    1 to "Cepillo de dientes",
+    2 to "Libro",
+    3 to "Agua",
+    4 to "TV",
+    5 to "Música",
+    6 to "Comida",
+    7 to "Leche",
+    8 to "Chupete",
+    9 to "Teléfono",
+    10 to "Mascarilla",
+    11 to "Ordenar",
+    12 to "Ducha",
+)
+
+private fun scheduleTagLabel(tag: Int?): String =
+    scheduleTags.firstOrNull { it.first == tag }?.second ?: (tag?.toString() ?: "—")
+
+private fun scheduleTimeLabel(time: Int?): String =
+    time?.let { "%02d:%02d".format(it / 100, it % 100) } ?: "—"
+
+private val timeRegex = Regex("^([01]?\\d|2[0-3]):[0-5]\\d$")
+
+@Composable
+private fun ConfigPane(vm: RobotViewModel, ui: UiState) {
+    var lang by rememberSaveable { mutableStateOf("en") }
+    var hour24 by rememberSaveable { mutableStateOf(true) }
+    var celsius by rememberSaveable { mutableStateOf(true) }
+    var metric by rememberSaveable { mutableStateOf(true) }
+    var chatty by rememberSaveable { mutableStateOf(true) }
+    var selfani by rememberSaveable { mutableStateOf(true) }
+    var tapani by rememberSaveable { mutableStateOf(true) }
+    var doubletap by rememberSaveable { mutableStateOf(true) }
+    var wakeModel by rememberSaveable { mutableStateOf(0) }
+
+    var robotName by rememberSaveable { mutableStateOf("") }
+    var birthday by rememberSaveable { mutableStateOf("") }
+    var birthdayError by rememberSaveable { mutableStateOf(false) }
+
+    var quietFrom by rememberSaveable { mutableStateOf("22:00") }
+    var quietTo by rememberSaveable { mutableStateOf("07:00") }
+    var quietError by rememberSaveable { mutableStateOf(false) }
+
+    var schedTime by rememberSaveable { mutableStateOf("20:00") }
+    var schedTag by rememberSaveable { mutableStateOf(1) }
+    var schedError by rememberSaveable { mutableStateOf(false) }
+
+    val quietValid = timeRegex.matches(quietFrom) && timeRegex.matches(quietTo)
+    val schedValid = timeRegex.matches(schedTime)
+    val birthdayValid = Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(birthday)
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Idioma")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    langOptions.forEach { (code, label) ->
+                        FilterChip(
+                            selected = lang == code,
+                            onClick = { lang = code; vm.setLang(code) },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Formato de hora", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                        Text(
+                            if (hour24) "24 h (14:30)" else "12 h (2:30 PM)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                        )
+                    }
+                    Switch(
+                        checked = hour24,
+                        onCheckedChange = { on -> hour24 = on; vm.setHour24(on) },
+                    )
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Unidades")
+                Text("Temperatura", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = celsius,
+                        onClick = { celsius = true; vm.setTempUnit(true) },
+                        label = { Text("°C") },
+                    )
+                    FilterChip(
+                        selected = !celsius,
+                        onClick = { celsius = false; vm.setTempUnit(false) },
+                        label = { Text("°F") },
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("Longitud", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = metric,
+                        onClick = { metric = true; vm.setLengthUnit(true) },
+                        label = { Text("cm") },
+                    )
+                    FilterChip(
+                        selected = !metric,
+                        onClick = { metric = false; vm.setLengthUnit(false) },
+                        label = { Text("in") },
+                    )
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Interacciones")
+                ConfigSwitchRow("Modo charlatán", "El robot conversa más seguido", chatty) {
+                    chatty = it
+                    vm.setChatty(it)
+                }
+                ConfigSwitchRow("Animaciones propias", "Se mueve solo aunque nadie lo toque", selfani) {
+                    selfani = it
+                    vm.setSelfani(it)
+                }
+                ConfigSwitchRow("Animaciones al tocar", "Reacciona al tacto", tapani) {
+                    tapani = it
+                    vm.setTapani(it)
+                }
+                ConfigSwitchRow("Doble toque", "Reacción al toque doble", doubletap) {
+                    doubletap = it
+                    vm.setDoubletap(it)
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Modelo de despertar")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = wakeModel == 0,
+                        onClick = { wakeModel = 0; vm.setWakeModel(0) },
+                        label = { Text("V1") },
+                    )
+                    FilterChip(
+                        selected = wakeModel == 1,
+                        onClick = { wakeModel = 1; vm.setWakeModel(1) },
+                        label = { Text("V2") },
+                    )
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Información")
+                OutlinedTextField(
+                    value = robotName,
+                    onValueChange = { robotName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Nombre del robot") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                PrimaryButton(
+                    text = "Guardar nombre",
+                    onClick = { vm.setLastName(robotName) },
+                    enabled = robotName.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = birthday,
+                    onValueChange = { birthday = it; birthdayError = false },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Cumpleaños") },
+                    placeholder = { Text("AAAA-MM-DD") },
+                    singleLine = true,
+                    isError = birthdayError,
+                    supportingText = if (birthdayError) {
+                        { Text("Formato AAAA-MM-DD") }
+                    } else {
+                        null
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+                PrimaryButton(
+                    text = "Guardar cumpleaños",
+                    onClick = {
+                        if (birthdayValid) {
+                            birthdayError = false
+                            vm.setBirthday(birthday)
+                        } else {
+                            birthdayError = true
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Horas silenciosas")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = quietFrom,
+                        onValueChange = { quietFrom = it; quietError = false },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Desde") },
+                        placeholder = { Text("HH:mm") },
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = quietTo,
+                        onValueChange = { quietTo = it; quietError = false },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Hasta") },
+                        placeholder = { Text("HH:mm") },
+                        singleLine = true,
+                    )
+                }
+                if (quietError) {
+                    Text(
+                        "Horario inválido: la hora de inicio debe ser anterior a la de fin",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                PrimaryButton(
+                    text = "Agregar",
+                    onClick = {
+                        if (quietValid) {
+                            quietError = false
+                            vm.quietAdd(quietFrom, quietTo)
+                        } else {
+                            quietError = true
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { vm.quietList() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Listar períodos")
+                }
+            }
+        }
+        if (ui.quiets.isEmpty()) {
+            item {
+                EmptyState(
+                    icon = Icons.Default.Settings,
+                    title = "Sin horas silenciosas",
+                    subtitle = "Agregá un período con «Desde» y «Hasta».",
+                )
+            }
+        } else {
+            items(ui.quiets) { quiet ->
+                AppCard(Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${quiet.from} – ${quiet.to}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextPrimary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = { vm.quietDel(quiet.index) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = TextSecondary)
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Horario dormir / despertar")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (ui.scheduleSwitch == true) "Horario activo" else "Horario pausado",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = TextPrimary,
+                        )
+                        Text(
+                            "Enciende o pausa todos los horarios del robot",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                        )
+                    }
+                    Switch(
+                        checked = ui.scheduleSwitch == true,
+                        onCheckedChange = { vm.scheduleSwitch(it) },
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = schedTime,
+                    onValueChange = { schedTime = it; schedError = false },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Hora") },
+                    placeholder = { Text("HH:mm") },
+                    singleLine = true,
+                    isError = schedError,
+                    supportingText = if (schedError) {
+                        { Text("Formato HH:mm") }
+                    } else {
+                        null
+                    },
+                )
+                SectionTitle("Recordatorio")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    scheduleTags.forEach { (tag, label) ->
+                        FilterChip(
+                            selected = schedTag == tag,
+                            onClick = { schedTag = tag },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                PrimaryButton(
+                    text = "Agregar",
+                    onClick = {
+                        if (schedValid) {
+                            schedError = false
+                            vm.scheduleAdd(schedTime, schedTag)
+                        } else {
+                            schedError = true
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { vm.scheduleList() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Listar horarios")
+                }
+            }
+        }
+        if (ui.schedules.isEmpty()) {
+            item {
+                EmptyState(
+                    icon = Icons.Default.Schedule,
+                    title = "Sin horarios",
+                    subtitle = "Agregá un horario con hora y recordatorio.",
+                )
+            }
+        } else {
+            items(ui.schedules) { sched ->
+                AppCard(Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                scheduleTimeLabel(sched.time),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextPrimary,
+                            )
+                            Text(
+                                scheduleTagLabel(sched.tag),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary,
+                            )
+                        }
+                        IconButton(onClick = { vm.scheduleDel(sched.index) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = TextSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfigSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

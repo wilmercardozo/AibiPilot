@@ -67,6 +67,10 @@ data class AlarmItem(val index: Int, val time: String, val tag: Int?)
 
 data class LightItem(val id: Int, val name: String?)
 
+data class QuietItem(val index: Int, val from: String, val to: String)
+
+data class ScheduleItem(val index: Int, val tag: Int?, val time: Int?)
+
 data class ChatMsg(val role: String, val content: String)
 
 enum class LogCat { TX, RX, EVT, ERR, SYS }
@@ -156,6 +160,9 @@ data class UiState(
     val volume: String = "high",
     val alarms: List<AlarmItem> = emptyList(),
     val lights: List<LightItem> = emptyList(),
+    val quiets: List<QuietItem> = emptyList(),
+    val schedules: List<ScheduleItem> = emptyList(),
+    val scheduleSwitch: Boolean? = null,
     val photoServerRunning: Boolean = false,
     val photos: List<String> = emptyList(),
     val chat: List<ChatMsg> = emptyList(),
@@ -657,6 +664,45 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         val result = data["result"]?.jsonPrimitive?.contentOrNull ?: return
         // loguear el resultado al modo ack (setting_in_ok, setting_volume_ok, etc.)
         modeAckFlow.tryEmit(result)
+        if (result == "setting_quiet_list_ok") {
+            val list = data["list"]?.jsonArray
+            val quiets = mutableListOf<QuietItem>()
+            if (list != null) {
+                for (el in list) {
+                    val obj = el as? JsonObject ?: continue
+                    quiets.add(
+                        QuietItem(
+                            index = obj["index"]?.jsonPrimitive?.intOrNull ?: 0,
+                            from = obj["from"]?.jsonPrimitive?.contentOrNull ?: "",
+                            to = obj["to"]?.jsonPrimitive?.contentOrNull ?: ""
+                        )
+                    )
+                }
+            }
+            _ui.update { it.copy(quiets = quiets) }
+            log("Horas silenciosas: ${quiets.joinToString { q -> "${q.from}-${q.to}" }}")
+        }
+        if (result == "setting_schedule_list_ok") {
+            val list = data["list"]?.jsonArray
+            val schedules = mutableListOf<ScheduleItem>()
+            if (list != null) {
+                for (el in list) {
+                    val obj = el as? JsonObject ?: continue
+                    schedules.add(
+                        ScheduleItem(
+                            index = obj["index"]?.jsonPrimitive?.intOrNull ?: 0,
+                            tag = obj["tag"]?.jsonPrimitive?.intOrNull,
+                            time = obj["time"]?.jsonPrimitive?.intOrNull
+                        )
+                    )
+                }
+            }
+            val sw = data["switch"]?.jsonPrimitive?.let { p ->
+                p.contentOrNull?.let { it == "on" } ?: p.intOrNull?.let { it != 0 }
+            }
+            _ui.update { it.copy(schedules = schedules, scheduleSwitch = sw) }
+            log("Horario: ${schedules.joinToString { s -> "${s.time}#${s.tag}" }} switch=$sw")
+        }
         // respuesta de wifilist: el formato real se aprende en vivo (lista en "list" o similar)
         if (result.contains("wifilist", ignoreCase = true)) {
             val list = data["list"]?.jsonArray
@@ -871,6 +917,22 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Variante de [withAck] que acepta varios result posibles. Sirve para
+     * ops cuyo ACK real no se pudo confirmar: la app oficial compara los
+     * result de tapani/doubletap contra "setting_selfani_ok" (constante
+     * duplicada en BleSettingsResponse.kt), así que se acepta el result
+     * canónico `<op>_ok` o el alternativo "setting_selfani_ok".
+     */
+    suspend fun withAckAny(expects: List<String>, timeoutMs: Long = 8000, block: suspend () -> Unit): Boolean {
+        block()
+        val candidates = expects.flatMap { e -> listOf("${e}_ok", "${e}_no") }.toSet()
+        val result = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            modeAckFlow.filter { it in candidates }.first()
+        }
+        return result?.endsWith("_ok") == true
+    }
+
+    /**
      * Acción con feedback pendiente→ok→error vía withAck: muestra el
      * snackbar de éxito si el robot confirmó, o "No respondió…" ante
      * un "_no" o timeout.
@@ -887,12 +949,181 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun runAckedAny(expects: List<String>, okMsg: String, block: suspend () -> Unit) {
+        viewModelScope.launch {
+            val ok = withAckAny(expects) { block() }
+            if (ok) {
+                showSnackbar(okMsg)
+            } else {
+                log(LogCat.ERR, "Sin ACK de ${expects.joinToString("/")} (o respuesta negativa)")
+                showSnackbar("No respondió…")
+            }
+        }
+    }
+
     fun setVolume(level: String) {
         _ui.update { it.copy(volume = level) }
         showSnackbar("Enviando volumen…")
         ensureMode("setting") {
             runAcked("setting_volume", "Volumen ok") {
                 send(Protocol.settingVolume(level), "Volumen: $level")
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Configuración del robot (settings oficiales, con withAck)
+    // ------------------------------------------------------------------
+    fun setLang(langcode: String) {
+        showSnackbar("Cambiando idioma…")
+        ensureMode("setting") {
+            runAcked("setting_lang", "Idioma actualizado") {
+                send(Protocol.settingLang(langcode), "lang $langcode")
+            }
+        }
+    }
+
+    fun setTempUnit(celsius: Boolean) {
+        val label = if (celsius) "Celsius" else "Fahrenheit"
+        showSnackbar("Cambiando unidad…")
+        ensureMode("setting") {
+            runAcked("setting_temp", "Unidad de temperatura: $label") {
+                send(Protocol.settingTemp(if (celsius) 0 else 1), "temp ${if (celsius) 0 else 1}")
+            }
+        }
+    }
+
+    fun setLengthUnit(metric: Boolean) {
+        val label = if (metric) "Métrico" else "Imperial"
+        showSnackbar("Cambiando unidad…")
+        ensureMode("setting") {
+            runAcked("setting_length", "Unidad de longitud: $label") {
+                send(Protocol.settingLength(if (metric) 0 else 1), "length ${if (metric) 0 else 1}")
+            }
+        }
+    }
+
+    fun setHour24(on: Boolean) {
+        showSnackbar("Cambiando formato de hora…")
+        ensureMode("setting") {
+            runAcked("setting_24hour", if (on) "Formato 24 h activado" else "Formato 12 h activado") {
+                send(Protocol.settingHour24(if (on) 1 else 0), "24hour ${if (on) 1 else 0}")
+            }
+        }
+    }
+
+    fun setWakeModel(model: Int) {
+        showSnackbar("Cambiando modelo de despertar…")
+        ensureMode("setting") {
+            runAcked("setting_wakemodel", "Modelo de despertar: V${model + 1}") {
+                send(Protocol.settingWakeModel(model), "wakemodel $model")
+            }
+        }
+    }
+
+    fun setChatty(on: Boolean) {
+        showSnackbar(if (on) "Activando modo charlatán…" else "Desactivando modo charlatán…")
+        ensureMode("setting") {
+            runAcked("setting_chatty", "Modo charlatán: ${if (on) "ON" else "OFF"}") {
+                send(Protocol.settingChatty(if (on) 1 else 0), "chatty ${if (on) 1 else 0}")
+            }
+        }
+    }
+
+    fun setSelfani(on: Boolean) {
+        showSnackbar(if (on) "Activando animaciones propias…" else "Desactivando animaciones propias…")
+        ensureMode("setting") {
+            runAcked("setting_selfani", "Animaciones propias: ${if (on) "ON" else "OFF"}") {
+                send(Protocol.settingSelfani(if (on) 1 else 0), "selfani ${if (on) 1 else 0}")
+            }
+        }
+    }
+
+    fun setTapani(on: Boolean) {
+        showSnackbar(if (on) "Activando animaciones al tocar…" else "Desactivando animaciones al tocar…")
+        ensureMode("setting") {
+            // el oficial compara tapani contra "setting_selfani_ok" (constante duplicada);
+            // se aceptan ambos result
+            runAckedAny(listOf("setting_tapani", "setting_selfani"), "Animaciones al tocar: ${if (on) "ON" else "OFF"}") {
+                send(Protocol.settingTapani(if (on) 1 else 0), "tapani ${if (on) 1 else 0}")
+            }
+        }
+    }
+
+    fun setDoubletap(on: Boolean) {
+        showSnackbar(if (on) "Activando reacción al doble toque…" else "Desactivando reacción al doble toque…")
+        ensureMode("setting") {
+            // mismo caso que tapani: la UI oficial espera "setting_selfani_ok"
+            runAckedAny(listOf("setting_doubletap", "setting_selfani"), "Doble toque: ${if (on) "ON" else "OFF"}") {
+                send(Protocol.settingDoubletap(if (on) 1 else 0), "doubletap ${if (on) 1 else 0}")
+            }
+        }
+    }
+
+    fun setLastName(name: String) {
+        showSnackbar("Guardando nombre…")
+        ensureMode("setting") {
+            runAcked("setting_lastname", "Nombre guardado") {
+                send(Protocol.settingLastName(name), "lastname $name")
+            }
+        }
+    }
+
+    fun setBirthday(birthday: String) {
+        showSnackbar("Guardando cumpleaños…")
+        ensureMode("setting") {
+            runAcked("setting_birthday", "Cumpleaños guardado") {
+                send(Protocol.settingBirthday(birthday), "birthday $birthday")
+            }
+        }
+    }
+
+    fun quietList() = ensureMode("setting") { send(Protocol.settingQuietList(), "quiet list") }
+
+    fun quietAdd(from: String, to: String) {
+        showSnackbar("Agregando horas silenciosas…")
+        ensureMode("setting") {
+            runAcked("setting_quiet_add", "Horas silenciosas agregadas") {
+                send(Protocol.settingQuietAdd(from, to), "quiet add $from-$to")
+            }
+        }
+    }
+
+    fun quietDel(index: Int) {
+        showSnackbar("Eliminando período…")
+        ensureMode("setting") {
+            runAcked("setting_quiet_del", "Período eliminado") {
+                send(Protocol.settingQuietDel(index), "quiet del #$index")
+            }
+        }
+    }
+
+    fun scheduleList() = ensureMode("setting") { send(Protocol.settingScheduleList(), "schedule list") }
+
+    fun scheduleAdd(time: String, tag: Int) {
+        val t = time.replace(":", "").toIntOrNull() ?: return
+        showSnackbar("Agregando horario…")
+        ensureMode("setting") {
+            runAcked("setting_schedule_add", "Horario agregado") {
+                send(Protocol.settingScheduleAdd(t, tag), "schedule add $t#$tag")
+            }
+        }
+    }
+
+    fun scheduleDel(index: Int) {
+        showSnackbar("Eliminando horario…")
+        ensureMode("setting") {
+            runAcked("setting_schedule_del", "Horario eliminado") {
+                send(Protocol.settingScheduleDel(index), "schedule del #$index")
+            }
+        }
+    }
+
+    fun scheduleSwitch(on: Boolean) {
+        showSnackbar(if (on) "Activando horario…" else "Desactivando horario…")
+        ensureMode("setting") {
+            runAcked("setting_schedule_switch", if (on) "Horario activado" else "Horario desactivado") {
+                send(Protocol.settingScheduleSwitch(on), "schedule switch ${if (on) "on" else "off"}")
             }
         }
     }

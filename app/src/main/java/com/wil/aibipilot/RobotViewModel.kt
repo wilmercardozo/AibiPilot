@@ -171,6 +171,7 @@ data class UiState(
     val remoteRunning: Boolean = false,
     val routines: List<Routine> = emptyList(),
     val rawHistory: List<String> = emptyList(),
+    val lastRawResponse: String? = null,
     val motionSweeping: Boolean = false,
     val motionSweepCmd: Int? = null,
     val wifiNetworks: List<WifiNet> = emptyList(),
@@ -233,6 +234,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private var connectTimeoutJob: kotlinx.coroutines.Job? = null
     private var lastRxAt = 0L
     private var lastTxAt = 0L
+    private var rawPending = false
     private var lowBatteryNotified = false
 
     // Apagado robusto (BUG-1): mientras poweringOff, una desconexión BLE es éxito
@@ -672,6 +674,10 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun parseResponse(jsonStr: String) {
         android.util.Log.d("AibiBle", "RX $jsonStr")
+        if (rawPending) {
+            rawPending = false
+            _ui.update { it.copy(lastRawResponse = jsonStr) }
+        }
         try {
             val root = Protocol.json.parseToJsonElement(jsonStr).jsonObject
             when (val type = root["type"]?.jsonPrimitive?.contentOrNull) {
@@ -1531,10 +1537,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         return try {
             Protocol.json.parseToJsonElement(text)
             val updated = (_ui.value.rawHistory + text).takeLast(MAX_RAW_HISTORY)
-            _ui.update { it.copy(rawHistory = updated) }
+            _ui.update { it.copy(rawHistory = updated, lastRawResponse = null) }
             prefs().edit()
                 .putString(KEY_RAW_HISTORY, Protocol.json.encodeToString(rawHistorySerializer, updated))
                 .apply()
+            rawPending = true
             send(Protocol.frame(text), "raw ${text.take(40)}")
             true
         } catch (e: Exception) {

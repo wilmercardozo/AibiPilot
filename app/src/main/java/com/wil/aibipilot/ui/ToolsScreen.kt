@@ -1514,6 +1514,25 @@ private val labTemplates = listOf(
     LabTemplate("game play", """{"type":"chess_req","data":{"op":"play"}}"""),
     LabTemplate("photo in", """{"type":"photo_req","data":{"op":"in"}}"""),
     LabTemplate("photo sync", """{"type":"photo_req","data":{"op":"sync","server":{"ip":"TU_IP","port":9090}}}"""),
+    LabTemplate("setting lang", """{"type":"setting_req","data":{"op":"lang","langcode":"es"}}"""),
+    LabTemplate("setting 24hour", """{"type":"setting_req","data":{"op":"24hour","option":0}}"""),
+    LabTemplate("setting temp 0", """{"type":"setting_req","data":{"op":"temp","option":0}}"""),
+    LabTemplate("setting temp 1", """{"type":"setting_req","data":{"op":"temp","option":1}}"""),
+    LabTemplate("setting length 0", """{"type":"setting_req","data":{"op":"length","option":0}}"""),
+    LabTemplate("setting length 1", """{"type":"setting_req","data":{"op":"length","option":1}}"""),
+    LabTemplate("setting otanotify", """{"type":"setting_req","data":{"op":"otanotify","option":0}}"""),
+    LabTemplate("setting chatty", """{"type":"setting_req","data":{"op":"chatty","option":0}}"""),
+    LabTemplate("setting doubletap", """{"type":"setting_req","data":{"op":"doubletap","option":0}}"""),
+    LabTemplate("setting quiet_list", """{"type":"setting_req","data":{"op":"quiet_list"}}"""),
+    LabTemplate("setting quiet_add", """{"type":"setting_req","data":{"op":"quiet_add","from":"22:00","to":"07:00"}}"""),
+    LabTemplate("setting quiet_del", """{"type":"setting_req","data":{"op":"quiet_del","index":0}}"""),
+    LabTemplate("setting schedule_list", """{"type":"setting_req","data":{"op":"schedule_list"}}"""),
+    LabTemplate("setting schedule_add", """{"type":"setting_req","data":{"op":"schedule_add","time":800,"tag":0}}"""),
+    LabTemplate("setting schedule_del", """{"type":"setting_req","data":{"op":"schedule_del","index":0}}"""),
+    LabTemplate("setting schedule_switch", """{"type":"setting_req","data":{"op":"schedule_switch","switch":"on"}}"""),
+    LabTemplate("setting wakemodel", """{"type":"setting_req","data":{"op":"wakemodel","model":0}}"""),
+    LabTemplate("setting lastname", """{"type":"setting_req","data":{"op":"lastname","name":"AIBI"}}"""),
+    LabTemplate("setting birthday", """{"type":"setting_req","data":{"op":"birthday","birthday":"2024-01-01"}}"""),
 )
 
 private data class FactoryAction(
@@ -1652,11 +1671,33 @@ private fun LabPane(vm: RobotViewModel, ui: UiState) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    "Las respuestas del robot se ven en la sub-pestaña Log BLE.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary,
-                )
+                if (ui.lastRawResponse != null) {
+                    val resp = ui.lastRawResponse!!
+                    val respColor = when {
+                        "\"_ok\"" in resp -> StatusGreen
+                        resp.contains("_no") || resp.contains("error") ->
+                            MaterialTheme.colorScheme.error
+                        else -> TextSecondary
+                    }
+                    Text(
+                        "Última respuesta del robot",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextSecondary,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = resp,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = respColor,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    Text(
+                        "La respuesta del último comando aparece acá; el tráfico completo, en la sub-pestaña Log BLE.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                }
             }
         }
         item {

@@ -57,6 +57,9 @@ class BleClient(private val context: Context) {
     @Volatile
     private var activeScanCallback: ScanCallback? = null
 
+    @Volatile
+    private var rssiListener: ((Int) -> Unit)? = null
+
     // Reensamblado RX
     private val rxBuffer = java.io.ByteArrayOutputStream()
     private var rxTotal = -1
@@ -198,6 +201,12 @@ class BleClient(private val context: Context) {
                 ) {
                     handleIncoming(value, onEvent)
                 }
+
+                override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) {
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        rssiListener?.invoke(rssi)
+                    }
+                }
             },
             BluetoothDevice.TRANSPORT_LE
         )
@@ -270,6 +279,22 @@ class BleClient(private val context: Context) {
         }
     }
 
+    /**
+     * RSSI en vivo de la conexión BLE: dispara un readRemoteRssi y el valor
+     * llega por [onRssi] vía onReadRemoteRssi. Sin conexión activa no se
+     * invoca el callback.
+     */
+    @SuppressLint("MissingPermission")
+    fun readRemoteRssi(onRssi: (Int) -> Unit) {
+        rssiListener = onRssi
+        val g = gatt ?: return
+        try {
+            g.readRemoteRssi()
+        } catch (e: Exception) {
+            Log.e(TAG, "readRemoteRssi exception: ${e.message}")
+        }
+    }
+
     @SuppressLint("MissingPermission")
     fun disconnect() {
         try {
@@ -279,6 +304,7 @@ class BleClient(private val context: Context) {
         }
         gatt = null
         writeChar = null
+        rssiListener = null
     }
 
     fun currentMtu(): Int = mtu

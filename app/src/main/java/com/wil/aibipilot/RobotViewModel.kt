@@ -6,6 +6,10 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wil.aibipilot.ble.BleClient
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.wil.aibipilot.ble.BleEvent
 import com.wil.aibipilot.ble.PhotoTcpServer
 import com.wil.aibipilot.ble.RemoteService
@@ -66,6 +70,10 @@ data class RobotInfo(
 data class AlarmItem(val index: Int, val time: String, val tag: Int?)
 
 data class LightItem(val id: Int, val name: String?)
+
+data class QuietItem(val index: Int, val from: String, val to: String)
+
+data class ScheduleItem(val index: Int, val tag: Int?, val time: Int?)
 
 data class ChatMsg(val role: String, val content: String)
 
@@ -156,6 +164,9 @@ data class UiState(
     val volume: String = "high",
     val alarms: List<AlarmItem> = emptyList(),
     val lights: List<LightItem> = emptyList(),
+    val quiets: List<QuietItem> = emptyList(),
+    val schedules: List<ScheduleItem> = emptyList(),
+    val scheduleSwitch: Boolean? = null,
     val photoServerRunning: Boolean = false,
     val photos: List<String> = emptyList(),
     val chat: List<ChatMsg> = emptyList(),
@@ -164,6 +175,7 @@ data class UiState(
     val remoteRunning: Boolean = false,
     val routines: List<Routine> = emptyList(),
     val rawHistory: List<String> = emptyList(),
+    val lastRawResponse: String? = null,
     val motionSweeping: Boolean = false,
     val motionSweepCmd: Int? = null,
     val wifiNetworks: List<WifiNet> = emptyList(),
@@ -172,6 +184,9 @@ data class UiState(
     val wifiConnState: WifiConnState = WifiConnState.IDLE,
     val robotWifiTarget: String? = null,
     val robotWifiConnected: Boolean? = null,
+    val bleRssi: Int? = null,
+    val currentMode: String? = null,
+    val lastRxSeconds: Long = -1L,
     val snackbar: String? = null
 )
 
@@ -213,6 +228,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     private var reconnectJob: kotlinx.coroutines.Job? = null
     private var keepAliveJob: kotlinx.coroutines.Job? = null
+    private var rssiJob: kotlinx.coroutines.Job? = null
+    private var rxTickerJob: kotlinx.coroutines.Job? = null
     private var snackbarNonce = 0
     private var reconnectAttempt = 0
     private var reconnectCancelled = false
@@ -221,6 +238,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     private var connectTimeoutJob: kotlinx.coroutines.Job? = null
     private var lastRxAt = 0L
     private var lastTxAt = 0L
+    private var rawPending = false
     private var lowBatteryNotified = false
 
     // Apagado robusto (BUG-1): mientras poweringOff, una desconexión BLE es éxito
@@ -439,6 +457,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                     _ui.update { it.copy(conn = ConnState.CONNECTED) }
                     log("Conectado. MTU: ${ble.currentMtu()}")
                     startKeepAlive()
+                    startRssiLoop()
+                    startRxTicker()
                     viewModelScope.launch {
                         kotlinx.coroutines.delay(1000)
                         handshake()
@@ -487,7 +507,8 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             it.copy(
                 wifiConnState = WifiConnState.IDLE,
                 robotWifiTarget = null,
-                robotWifiConnected = null
+                robotWifiConnected = null,
+                bleRssi = null
             )
         }
         reconnectAttempt++
@@ -603,6 +624,43 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         send(payload, "handshake sta_req query[1,8,11,12]")
     }
 
+    /**
+     * RSSI en vivo para Diagnóstico: pide el RSSI cada ~5s mientras esté
+     * conectado. Es una lectura local de la radio; no cuenta como tráfico
+     * RX/TX, así que no interfiere con el keep-alive.
+     */
+    private fun startRssiLoop() {
+        rssiJob?.cancel()
+        rssiJob = viewModelScope.launch {
+            while (isActive) {
+                if (_ui.value.conn == ConnState.CONNECTED) {
+                    ble.readRemoteRssi { rssi ->
+                        _ui.update { it.copy(bleRssi = rssi) }
+                    }
+                }
+                kotlinx.coroutines.delay(5000)
+            }
+        }
+    }
+
+    /**
+     * Ticker liviano (~1s): actualiza lastRxSeconds para Diagnóstico solo
+     * mientras la conexión está activa. No toca lastRxAt (lo usa keep-alive).
+     */
+    private fun startRxTicker() {
+        rxTickerJob?.cancel()
+        rxTickerJob = viewModelScope.launch {
+            while (isActive) {
+                if (_ui.value.conn == ConnState.CONNECTED) {
+                    val seconds = if (lastRxAt == 0L) -1L
+                    else (android.os.SystemClock.elapsedRealtime() - lastRxAt) / 1000
+                    _ui.update { it.copy(lastRxSeconds = seconds) }
+                }
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+
     private fun onBleEvent(event: BleEvent) {
         lastRxAt = android.os.SystemClock.elapsedRealtime()
         rxEvents.tryEmit(Unit)
@@ -620,6 +678,10 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun parseResponse(jsonStr: String) {
         android.util.Log.d("AibiBle", "RX $jsonStr")
+        if (rawPending) {
+            rawPending = false
+            _ui.update { it.copy(lastRawResponse = jsonStr) }
+        }
         try {
             val root = Protocol.json.parseToJsonElement(jsonStr).jsonObject
             when (val type = root["type"]?.jsonPrimitive?.contentOrNull) {
@@ -630,7 +692,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 if (eventName == "modeout") {
                     val evCurrent = root["data"]?.jsonObject?.get("current")?.jsonPrimitive?.contentOrNull
                     if (evCurrent == null || evCurrent == currentMode) {
-                        currentMode = null
+                        setCurrentMode(null)
                         log(LogCat.EVT, "El robot salió del modo de función")
                     } else {
                         log(LogCat.EVT, "modeout de un modo anterior ($evCurrent), ignorado")
@@ -657,6 +719,45 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         val result = data["result"]?.jsonPrimitive?.contentOrNull ?: return
         // loguear el resultado al modo ack (setting_in_ok, setting_volume_ok, etc.)
         modeAckFlow.tryEmit(result)
+        if (result == "setting_quiet_list_ok") {
+            val list = data["list"]?.jsonArray
+            val quiets = mutableListOf<QuietItem>()
+            if (list != null) {
+                for (el in list) {
+                    val obj = el as? JsonObject ?: continue
+                    quiets.add(
+                        QuietItem(
+                            index = obj["index"]?.jsonPrimitive?.intOrNull ?: 0,
+                            from = obj["from"]?.jsonPrimitive?.contentOrNull ?: "",
+                            to = obj["to"]?.jsonPrimitive?.contentOrNull ?: ""
+                        )
+                    )
+                }
+            }
+            _ui.update { it.copy(quiets = quiets) }
+            log("Horas silenciosas: ${quiets.joinToString { q -> "${q.from}-${q.to}" }}")
+        }
+        if (result == "setting_schedule_list_ok") {
+            val list = data["list"]?.jsonArray
+            val schedules = mutableListOf<ScheduleItem>()
+            if (list != null) {
+                for (el in list) {
+                    val obj = el as? JsonObject ?: continue
+                    schedules.add(
+                        ScheduleItem(
+                            index = obj["index"]?.jsonPrimitive?.intOrNull ?: 0,
+                            tag = obj["tag"]?.jsonPrimitive?.intOrNull,
+                            time = obj["time"]?.jsonPrimitive?.intOrNull
+                        )
+                    )
+                }
+            }
+            val sw = data["switch"]?.jsonPrimitive?.let { p ->
+                p.contentOrNull?.let { it == "on" } ?: p.intOrNull?.let { it != 0 }
+            }
+            _ui.update { it.copy(schedules = schedules, scheduleSwitch = sw) }
+            log("Horario: ${schedules.joinToString { s -> "${s.time}#${s.tag}" }} switch=$sw")
+        }
         // respuesta de wifilist: el formato real se aprende en vivo (lista en "list" o similar)
         if (result.contains("wifilist", ignoreCase = true)) {
             val list = data["list"]?.jsonArray
@@ -808,6 +909,12 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------------
     private var currentMode: String? = null
 
+    /** Actualiza el modo privado y lo expone en UiState (Diagnóstico). */
+    private fun setCurrentMode(mode: String?) {
+        currentMode = mode
+        _ui.update { it.copy(currentMode = mode) }
+    }
+
     private fun modeIn(mode: String): ByteArray = when (mode) {
         "show" -> Protocol.showIn()
         "light" -> Protocol.lightIn()
@@ -833,7 +940,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
             action()
             return
         }
-        currentMode = mode
+        setCurrentMode(mode)
         send(modeIn(mode), "$mode in")
         viewModelScope.launch {
             // esperar el ACK real del robot ("<feature>_in_ok") con timeout
@@ -850,7 +957,7 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
 
     fun exitCurrentMode() {
         val mode = currentMode ?: return
-        currentMode = null
+        setCurrentMode(null)
         send(modeOut(mode), "$mode out")
     }
 
@@ -871,6 +978,22 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Variante de [withAck] que acepta varios result posibles. Sirve para
+     * ops cuyo ACK real no se pudo confirmar: la app oficial compara los
+     * result de tapani/doubletap contra "setting_selfani_ok" (constante
+     * duplicada en BleSettingsResponse.kt), así que se acepta el result
+     * canónico `<op>_ok` o el alternativo "setting_selfani_ok".
+     */
+    suspend fun withAckAny(expects: List<String>, timeoutMs: Long = 8000, block: suspend () -> Unit): Boolean {
+        block()
+        val candidates = expects.flatMap { e -> listOf("${e}_ok", "${e}_no") }.toSet()
+        val result = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            modeAckFlow.filter { it in candidates }.first()
+        }
+        return result?.endsWith("_ok") == true
+    }
+
+    /**
      * Acción con feedback pendiente→ok→error vía withAck: muestra el
      * snackbar de éxito si el robot confirmó, o "No respondió…" ante
      * un "_no" o timeout.
@@ -887,12 +1010,181 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun runAckedAny(expects: List<String>, okMsg: String, block: suspend () -> Unit) {
+        viewModelScope.launch {
+            val ok = withAckAny(expects) { block() }
+            if (ok) {
+                showSnackbar(okMsg)
+            } else {
+                log(LogCat.ERR, "Sin ACK de ${expects.joinToString("/")} (o respuesta negativa)")
+                showSnackbar("No respondió…")
+            }
+        }
+    }
+
     fun setVolume(level: String) {
         _ui.update { it.copy(volume = level) }
         showSnackbar("Enviando volumen…")
         ensureMode("setting") {
             runAcked("setting_volume", "Volumen ok") {
                 send(Protocol.settingVolume(level), "Volumen: $level")
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Configuración del robot (settings oficiales, con withAck)
+    // ------------------------------------------------------------------
+    fun setLang(langcode: String) {
+        showSnackbar("Cambiando idioma…")
+        ensureMode("setting") {
+            runAcked("setting_lang", "Idioma actualizado") {
+                send(Protocol.settingLang(langcode), "lang $langcode")
+            }
+        }
+    }
+
+    fun setTempUnit(celsius: Boolean) {
+        val label = if (celsius) "Celsius" else "Fahrenheit"
+        showSnackbar("Cambiando unidad…")
+        ensureMode("setting") {
+            runAcked("setting_temp", "Unidad de temperatura: $label") {
+                send(Protocol.settingTemp(if (celsius) 0 else 1), "temp ${if (celsius) 0 else 1}")
+            }
+        }
+    }
+
+    fun setLengthUnit(metric: Boolean) {
+        val label = if (metric) "Métrico" else "Imperial"
+        showSnackbar("Cambiando unidad…")
+        ensureMode("setting") {
+            runAcked("setting_length", "Unidad de longitud: $label") {
+                send(Protocol.settingLength(if (metric) 0 else 1), "length ${if (metric) 0 else 1}")
+            }
+        }
+    }
+
+    fun setHour24(on: Boolean) {
+        showSnackbar("Cambiando formato de hora…")
+        ensureMode("setting") {
+            runAcked("setting_24hour", if (on) "Formato 24 h activado" else "Formato 12 h activado") {
+                send(Protocol.settingHour24(if (on) 1 else 0), "24hour ${if (on) 1 else 0}")
+            }
+        }
+    }
+
+    fun setWakeModel(model: Int) {
+        showSnackbar("Cambiando modelo de despertar…")
+        ensureMode("setting") {
+            runAcked("setting_wakemodel", "Modelo de despertar: V${model + 1}") {
+                send(Protocol.settingWakeModel(model), "wakemodel $model")
+            }
+        }
+    }
+
+    fun setChatty(on: Boolean) {
+        showSnackbar(if (on) "Activando modo charlatán…" else "Desactivando modo charlatán…")
+        ensureMode("setting") {
+            runAcked("setting_chatty", "Modo charlatán: ${if (on) "ON" else "OFF"}") {
+                send(Protocol.settingChatty(if (on) 1 else 0), "chatty ${if (on) 1 else 0}")
+            }
+        }
+    }
+
+    fun setSelfani(on: Boolean) {
+        showSnackbar(if (on) "Activando animaciones propias…" else "Desactivando animaciones propias…")
+        ensureMode("setting") {
+            runAcked("setting_selfani", "Animaciones propias: ${if (on) "ON" else "OFF"}") {
+                send(Protocol.settingSelfani(if (on) 1 else 0), "selfani ${if (on) 1 else 0}")
+            }
+        }
+    }
+
+    fun setTapani(on: Boolean) {
+        showSnackbar(if (on) "Activando animaciones al tocar…" else "Desactivando animaciones al tocar…")
+        ensureMode("setting") {
+            // el oficial compara tapani contra "setting_selfani_ok" (constante duplicada);
+            // se aceptan ambos result
+            runAckedAny(listOf("setting_tapani", "setting_selfani"), "Animaciones al tocar: ${if (on) "ON" else "OFF"}") {
+                send(Protocol.settingTapani(if (on) 1 else 0), "tapani ${if (on) 1 else 0}")
+            }
+        }
+    }
+
+    fun setDoubletap(on: Boolean) {
+        showSnackbar(if (on) "Activando reacción al doble toque…" else "Desactivando reacción al doble toque…")
+        ensureMode("setting") {
+            // mismo caso que tapani: la UI oficial espera "setting_selfani_ok"
+            runAckedAny(listOf("setting_doubletap", "setting_selfani"), "Doble toque: ${if (on) "ON" else "OFF"}") {
+                send(Protocol.settingDoubletap(if (on) 1 else 0), "doubletap ${if (on) 1 else 0}")
+            }
+        }
+    }
+
+    fun setLastName(name: String) {
+        showSnackbar("Guardando nombre…")
+        ensureMode("setting") {
+            runAcked("setting_lastname", "Nombre guardado") {
+                send(Protocol.settingLastName(name), "lastname $name")
+            }
+        }
+    }
+
+    fun setBirthday(birthday: String) {
+        showSnackbar("Guardando cumpleaños…")
+        ensureMode("setting") {
+            runAcked("setting_birthday", "Cumpleaños guardado") {
+                send(Protocol.settingBirthday(birthday), "birthday $birthday")
+            }
+        }
+    }
+
+    fun quietList() = ensureMode("setting") { send(Protocol.settingQuietList(), "quiet list") }
+
+    fun quietAdd(from: String, to: String) {
+        showSnackbar("Agregando horas silenciosas…")
+        ensureMode("setting") {
+            runAcked("setting_quiet_add", "Horas silenciosas agregadas") {
+                send(Protocol.settingQuietAdd(from, to), "quiet add $from-$to")
+            }
+        }
+    }
+
+    fun quietDel(index: Int) {
+        showSnackbar("Eliminando período…")
+        ensureMode("setting") {
+            runAcked("setting_quiet_del", "Período eliminado") {
+                send(Protocol.settingQuietDel(index), "quiet del #$index")
+            }
+        }
+    }
+
+    fun scheduleList() = ensureMode("setting") { send(Protocol.settingScheduleList(), "schedule list") }
+
+    fun scheduleAdd(time: String, tag: Int) {
+        val t = time.replace(":", "").toIntOrNull() ?: return
+        showSnackbar("Agregando horario…")
+        ensureMode("setting") {
+            runAcked("setting_schedule_add", "Horario agregado") {
+                send(Protocol.settingScheduleAdd(t, tag), "schedule add $t#$tag")
+            }
+        }
+    }
+
+    fun scheduleDel(index: Int) {
+        showSnackbar("Eliminando horario…")
+        ensureMode("setting") {
+            runAcked("setting_schedule_del", "Horario eliminado") {
+                send(Protocol.settingScheduleDel(index), "schedule del #$index")
+            }
+        }
+    }
+
+    fun scheduleSwitch(on: Boolean) {
+        showSnackbar(if (on) "Activando horario…" else "Desactivando horario…")
+        ensureMode("setting") {
+            runAcked("setting_schedule_switch", if (on) "Horario activado" else "Horario desactivado") {
+                send(Protocol.settingScheduleSwitch(on), "schedule switch ${if (on) "on" else "off"}")
             }
         }
     }
@@ -1003,7 +1295,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         reconnectJob?.cancel()
         keepAliveJob?.cancel()
         connectTimeoutJob?.cancel()
-        currentMode = null
+        rssiJob?.cancel()
+        rxTickerJob?.cancel()
+        setCurrentMode(null)
         currentDevice = null
         _ui.update {
             it.copy(
@@ -1013,7 +1307,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 info = RobotInfo(),
                 wifiConnState = WifiConnState.IDLE,
                 robotWifiTarget = null,
-                robotWifiConnected = null
+                robotWifiConnected = null,
+                bleRssi = null,
+                lastRxSeconds = -1L
             )
         }
         log(LogCat.SYS, "Robot apagado (desconexión BLE tras el comando off)")
@@ -1028,11 +1324,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     // Alarmas
     // ------------------------------------------------------------------
     fun alarmEnter() {
-        currentMode = "alarm"
+        setCurrentMode("alarm")
         send(Protocol.alarmIn(), "alarm in")
     }
     fun alarmExit() {
-        currentMode = null
+        setCurrentMode(null)
         send(Protocol.alarmOut(), "alarm out")
     }
     fun alarmRefresh() = ensureMode("alarm") { send(Protocol.alarmList(), "alarm list") }
@@ -1057,11 +1353,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     // Luces
     // ------------------------------------------------------------------
     fun lightEnter() {
-        currentMode = "light"
+        setCurrentMode("light")
         send(Protocol.lightIn(), "light in")
     }
     fun lightExit() {
-        currentMode = null
+        setCurrentMode(null)
         send(Protocol.lightOut(), "light out")
     }
     fun lightRefresh() = ensureMode("light") { send(Protocol.lightList(), "light list") }
@@ -1084,11 +1380,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     // Juegos (chess | snake | pirate | zero)
     // ------------------------------------------------------------------
     fun gameEnter(game: String) {
-        currentMode = game
+        setCurrentMode(game)
         send(Protocol.gameIn(game), "$game in")
     }
     fun gameExit(game: String) {
-        currentMode = null
+        setCurrentMode(null)
         send(Protocol.gameOut(game), "$game out")
     }
     fun gameStart(game: String) =
@@ -1100,11 +1396,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
     // Fotos (TCP)
     // ------------------------------------------------------------------
     fun photoEnter() {
-        currentMode = "photo"
+        setCurrentMode("photo")
         send(Protocol.photoIn(), "photo in")
     }
     fun photoExit() {
-        currentMode = null
+        setCurrentMode(null)
         send(Protocol.photoOut(), "photo out")
     }
     fun photoShow() = ensureMode("photo") { send(Protocol.photoShow(), "photo show") }
@@ -1170,7 +1466,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         reconnectInFlight = false
         reconnectJob?.cancel()
         keepAliveJob?.cancel()
-        currentMode = null
+        rssiJob?.cancel()
+        rxTickerJob?.cancel()
+        setCurrentMode(null)
         stopPhotoSync()
         ble.disconnect()
         currentDevice = null
@@ -1182,7 +1480,9 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
                 info = RobotInfo(),
                 wifiConnState = WifiConnState.IDLE,
                 robotWifiTarget = null,
-                robotWifiConnected = null
+                robotWifiConnected = null,
+                bleRssi = null,
+                lastRxSeconds = -1L
             )
         }
         log(LogCat.SYS, "Desconectado")
@@ -1215,6 +1515,26 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(log = emptyList()) }
     }
 
+    /**
+     * Escribe el log completo a
+     * `<getExternalFilesDir>/logs/aibi_log_<timestamp>.txt` y devuelve el
+     * archivo (o null si falla). El compartido se hace en la UI con
+     * FileProvider (authority `com.wil.aibipilot.fileprovider`).
+     */
+    fun exportLogFile(): File? {
+        return try {
+            val dir = File(getApplication<Application>().getExternalFilesDir(null), "logs")
+            dir.mkdirs()
+            val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val file = File(dir, "aibi_log_$ts.txt")
+            file.writeText(_ui.value.log.joinToString("\n") { "${it.cat.name} ${it.text}" })
+            file
+        } catch (e: Exception) {
+            log(LogCat.ERR, "Error exportando log: ${e.message}")
+            null
+        }
+    }
+
     // ------------------------------------------------------------------
     // Laboratorio (spec C4): consola JSON raw
     // ------------------------------------------------------------------
@@ -1241,10 +1561,11 @@ class RobotViewModel(app: Application) : AndroidViewModel(app) {
         return try {
             Protocol.json.parseToJsonElement(text)
             val updated = (_ui.value.rawHistory + text).takeLast(MAX_RAW_HISTORY)
-            _ui.update { it.copy(rawHistory = updated) }
+            _ui.update { it.copy(rawHistory = updated, lastRawResponse = null) }
             prefs().edit()
                 .putString(KEY_RAW_HISTORY, Protocol.json.encodeToString(rawHistorySerializer, updated))
                 .apply()
+            rawPending = true
             send(Protocol.frame(text), "raw ${text.take(40)}")
             true
         } catch (e: Exception) {

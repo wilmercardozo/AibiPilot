@@ -108,6 +108,156 @@ object Protocol {
         }.toString()
     )
 
+    // ------------------------------------------------------------------
+    // configuración del robot (op + campos exactos del oficial
+    // BleSettingsRequest.kt: lang/langcode, temp/length/24hour/chatty/
+    // selfani/tapani/doubletap/otanotify -> option(int), wakemodel ->
+    // model(int), lastname -> name, birthday -> birthday, quiet_add ->
+    // from/to (String "HH:MM"), schedule_add -> time(int HHMM)+tag(int),
+    // schedule_switch -> switch("on"|"off")
+    // ------------------------------------------------------------------
+    fun settingLang(langcode: String): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "lang")
+            put("langcode", langcode)
+        }.toString()
+    )
+
+    fun settingTemp(option: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "temp")
+            put("option", option)
+        }.toString()
+    )
+
+    fun settingLength(option: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "length")
+            put("option", option)
+        }.toString()
+    )
+
+    fun settingOtaNotify(option: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "otanotify")
+            put("option", option)
+        }.toString()
+    )
+
+    fun settingHour24(option: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "24hour")
+            put("option", option)
+        }.toString()
+    )
+
+    fun settingChatty(option: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "chatty")
+            put("option", option)
+        }.toString()
+    )
+
+    fun settingSelfani(option: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "selfani")
+            put("option", option)
+        }.toString()
+    )
+
+    fun settingTapani(option: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "tapani")
+            put("option", option)
+        }.toString()
+    )
+
+    fun settingDoubletap(option: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "doubletap")
+            put("option", option)
+        }.toString()
+    )
+
+    fun settingWakeModel(model: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "wakemodel")
+            put("model", model)
+        }.toString()
+    )
+
+    fun settingLastName(name: String): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "lastname")
+            put("name", name)
+        }.toString()
+    )
+
+    fun settingBirthday(birthday: String): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "birthday")
+            put("birthday", birthday)
+        }.toString()
+    )
+
+    fun settingQuietList(): ByteArray = request("setting_req", """{"op":"quiet_list"}""")
+
+    fun settingQuietAdd(from: String, to: String): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "quiet_add")
+            put("from", from)
+            put("to", to)
+        }.toString()
+    )
+
+    fun settingQuietDel(index: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "quiet_del")
+            put("index", index)
+        }.toString()
+    )
+
+    fun settingScheduleList(): ByteArray = request("setting_req", """{"op":"schedule_list"}""")
+
+    fun settingScheduleAdd(time: Int, tag: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "schedule_add")
+            put("time", time)
+            put("tag", tag)
+        }.toString()
+    )
+
+    fun settingScheduleDel(index: Int): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "schedule_del")
+            put("index", index)
+        }.toString()
+    )
+
+    fun settingScheduleSwitch(on: Boolean): ByteArray = request(
+        "setting_req",
+        buildJsonObject {
+            put("op", "schedule_switch")
+            put("switch", if (on) "on" else "off")
+        }.toString()
+    )
+
     /** Comando binario de movimiento (formato del modo debug oficial):
      *  55 AA 55 AA 21 <cmd> 00...00 ED (20 bytes) */
     fun motion(cmd: Int): ByteArray {

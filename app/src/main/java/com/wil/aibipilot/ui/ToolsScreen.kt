@@ -1,5 +1,8 @@
 package com.wil.aibipilot.ui
 
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +38,8 @@ import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.TheaterComedy
 import androidx.compose.material.icons.filled.WaterDrop
@@ -78,6 +83,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.FileProvider
 import com.wil.aibipilot.LogCat
 import com.wil.aibipilot.RobotViewModel
 import com.wil.aibipilot.UiState
@@ -96,10 +103,12 @@ import com.wil.aibipilot.ui.theme.TextSecondary
 import com.wil.aibipilot.ui.theme.Warning
 import com.wil.aibipilot.ui.theme.StatusGreen
 import com.wil.aibipilot.ui.theme.ErrorRed
+import kotlinx.coroutines.delay
 
 private enum class ToolTab(val label: String, val icon: ImageVector) {
     LUCES("Luces", Icons.Default.LightMode),
     ALARMAS("Alarmas", Icons.Default.AccessAlarm),
+    CONFIG("Configuración", Icons.Default.Settings),
     RUTINAS("Rutinas", Icons.Default.Schedule),
     FOTOS("Fotos", Icons.Default.PhotoCamera),
     WIFI("WiFi", Icons.Default.Wifi),
@@ -134,6 +143,7 @@ fun ToolsScreen(vm: RobotViewModel, ui: UiState) {
         when (tab) {
             ToolTab.LUCES -> LightsPane(vm, ui)
             ToolTab.ALARMAS -> AlarmsPane(vm, ui)
+            ToolTab.CONFIG -> ConfigPane(vm, ui)
             ToolTab.RUTINAS -> RoutinesPane(vm, ui)
             ToolTab.FOTOS -> PhotosPane(vm, ui)
             ToolTab.WIFI -> WifiPane(vm, ui)
@@ -387,6 +397,427 @@ private fun AlarmsPane(vm: RobotViewModel, ui: UiState) {
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Configuración del robot (settings oficiales)
+// ---------------------------------------------------------------------------
+
+private val langOptions = listOf(
+    "en" to "English",
+    "de" to "Deutsch",
+    "es" to "Español",
+    "fr" to "Français",
+    "it" to "Italiano",
+    "ja" to "日本語",
+    "ko" to "한국어",
+    "pt" to "Português",
+    "zh-CN" to "中文",
+    "ru" to "Русский",
+    "nl" to "Nederlands",
+    "pl" to "Polski",
+)
+
+private val scheduleTags = listOf(
+    1 to "Cepillo de dientes",
+    2 to "Libro",
+    3 to "Agua",
+    4 to "TV",
+    5 to "Música",
+    6 to "Comida",
+    7 to "Leche",
+    8 to "Chupete",
+    9 to "Teléfono",
+    10 to "Mascarilla",
+    11 to "Ordenar",
+    12 to "Ducha",
+)
+
+private fun scheduleTagLabel(tag: Int?): String =
+    scheduleTags.firstOrNull { it.first == tag }?.second ?: (tag?.toString() ?: "—")
+
+private fun scheduleTimeLabel(time: Int?): String =
+    time?.let { "%02d:%02d".format(it / 100, it % 100) } ?: "—"
+
+private val timeRegex = Regex("^([01]?\\d|2[0-3]):[0-5]\\d$")
+
+@Composable
+private fun ConfigPane(vm: RobotViewModel, ui: UiState) {
+    var lang by rememberSaveable { mutableStateOf("en") }
+    var hour24 by rememberSaveable { mutableStateOf(true) }
+    var celsius by rememberSaveable { mutableStateOf(true) }
+    var metric by rememberSaveable { mutableStateOf(true) }
+    var chatty by rememberSaveable { mutableStateOf(true) }
+    var selfani by rememberSaveable { mutableStateOf(true) }
+    var tapani by rememberSaveable { mutableStateOf(true) }
+    var doubletap by rememberSaveable { mutableStateOf(true) }
+    var wakeModel by rememberSaveable { mutableStateOf(0) }
+
+    var robotName by rememberSaveable { mutableStateOf("") }
+    var birthday by rememberSaveable { mutableStateOf("") }
+    var birthdayError by rememberSaveable { mutableStateOf(false) }
+
+    var quietFrom by rememberSaveable { mutableStateOf("22:00") }
+    var quietTo by rememberSaveable { mutableStateOf("07:00") }
+    var quietError by rememberSaveable { mutableStateOf(false) }
+
+    var schedTime by rememberSaveable { mutableStateOf("20:00") }
+    var schedTag by rememberSaveable { mutableStateOf(1) }
+    var schedError by rememberSaveable { mutableStateOf(false) }
+
+    val quietValid = timeRegex.matches(quietFrom) && timeRegex.matches(quietTo)
+    val schedValid = timeRegex.matches(schedTime)
+    val birthdayValid = Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(birthday)
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Idioma")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    langOptions.forEach { (code, label) ->
+                        FilterChip(
+                            selected = lang == code,
+                            onClick = { lang = code; vm.setLang(code) },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Formato de hora", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                        Text(
+                            if (hour24) "24 h (14:30)" else "12 h (2:30 PM)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                        )
+                    }
+                    Switch(
+                        checked = hour24,
+                        onCheckedChange = { on -> hour24 = on; vm.setHour24(on) },
+                    )
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Unidades")
+                Text("Temperatura", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = celsius,
+                        onClick = { celsius = true; vm.setTempUnit(true) },
+                        label = { Text("°C") },
+                    )
+                    FilterChip(
+                        selected = !celsius,
+                        onClick = { celsius = false; vm.setTempUnit(false) },
+                        label = { Text("°F") },
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("Longitud", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = metric,
+                        onClick = { metric = true; vm.setLengthUnit(true) },
+                        label = { Text("cm") },
+                    )
+                    FilterChip(
+                        selected = !metric,
+                        onClick = { metric = false; vm.setLengthUnit(false) },
+                        label = { Text("in") },
+                    )
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Interacciones")
+                ConfigSwitchRow("Modo charlatán", "El robot conversa más seguido", chatty) {
+                    chatty = it
+                    vm.setChatty(it)
+                }
+                ConfigSwitchRow("Animaciones propias", "Se mueve solo aunque nadie lo toque", selfani) {
+                    selfani = it
+                    vm.setSelfani(it)
+                }
+                ConfigSwitchRow("Animaciones al tocar", "Reacciona al tacto", tapani) {
+                    tapani = it
+                    vm.setTapani(it)
+                }
+                ConfigSwitchRow("Doble toque", "Reacción al toque doble", doubletap) {
+                    doubletap = it
+                    vm.setDoubletap(it)
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Modelo de despertar")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = wakeModel == 0,
+                        onClick = { wakeModel = 0; vm.setWakeModel(0) },
+                        label = { Text("V1") },
+                    )
+                    FilterChip(
+                        selected = wakeModel == 1,
+                        onClick = { wakeModel = 1; vm.setWakeModel(1) },
+                        label = { Text("V2") },
+                    )
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Información")
+                OutlinedTextField(
+                    value = robotName,
+                    onValueChange = { robotName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Nombre del robot") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                PrimaryButton(
+                    text = "Guardar nombre",
+                    onClick = { vm.setLastName(robotName) },
+                    enabled = robotName.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = birthday,
+                    onValueChange = { birthday = it; birthdayError = false },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Cumpleaños") },
+                    placeholder = { Text("AAAA-MM-DD") },
+                    singleLine = true,
+                    isError = birthdayError,
+                    supportingText = if (birthdayError) {
+                        { Text("Formato AAAA-MM-DD") }
+                    } else {
+                        null
+                    },
+                )
+                Spacer(Modifier.height(8.dp))
+                PrimaryButton(
+                    text = "Guardar cumpleaños",
+                    onClick = {
+                        if (birthdayValid) {
+                            birthdayError = false
+                            vm.setBirthday(birthday)
+                        } else {
+                            birthdayError = true
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Horas silenciosas")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = quietFrom,
+                        onValueChange = { quietFrom = it; quietError = false },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Desde") },
+                        placeholder = { Text("HH:mm") },
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = quietTo,
+                        onValueChange = { quietTo = it; quietError = false },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Hasta") },
+                        placeholder = { Text("HH:mm") },
+                        singleLine = true,
+                    )
+                }
+                if (quietError) {
+                    Text(
+                        "Horario inválido: usá el formato HH:mm (ej. 22:00). El robot acepta períodos que cruzan medianoche.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                PrimaryButton(
+                    text = "Agregar",
+                    onClick = {
+                        if (quietValid) {
+                            quietError = false
+                            vm.quietAdd(quietFrom, quietTo)
+                        } else {
+                            quietError = true
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { vm.quietList() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Listar períodos")
+                }
+            }
+        }
+        if (ui.quiets.isEmpty()) {
+            item {
+                EmptyState(
+                    icon = Icons.Default.Settings,
+                    title = "Sin horas silenciosas",
+                    subtitle = "Agregá un período con «Desde» y «Hasta».",
+                )
+            }
+        } else {
+            items(ui.quiets) { quiet ->
+                AppCard(Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${quiet.from} – ${quiet.to}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextPrimary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = { vm.quietDel(quiet.index) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = TextSecondary)
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            AppCard(Modifier.fillMaxWidth()) {
+                SectionTitle("Horario dormir / despertar")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (ui.scheduleSwitch == true) "Horario activo" else "Horario pausado",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = TextPrimary,
+                        )
+                        Text(
+                            "Enciende o pausa todos los horarios del robot",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                        )
+                    }
+                    Switch(
+                        checked = ui.scheduleSwitch == true,
+                        onCheckedChange = { vm.scheduleSwitch(it) },
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = schedTime,
+                    onValueChange = { schedTime = it; schedError = false },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Hora") },
+                    placeholder = { Text("HH:mm") },
+                    singleLine = true,
+                    isError = schedError,
+                    supportingText = if (schedError) {
+                        { Text("Formato HH:mm") }
+                    } else {
+                        null
+                    },
+                )
+                SectionTitle("Recordatorio")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    scheduleTags.forEach { (tag, label) ->
+                        FilterChip(
+                            selected = schedTag == tag,
+                            onClick = { schedTag = tag },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                PrimaryButton(
+                    text = "Agregar",
+                    onClick = {
+                        if (schedValid) {
+                            schedError = false
+                            vm.scheduleAdd(schedTime, schedTag)
+                        } else {
+                            schedError = true
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { vm.scheduleList() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Listar horarios")
+                }
+            }
+        }
+        if (ui.schedules.isEmpty()) {
+            item {
+                EmptyState(
+                    icon = Icons.Default.Schedule,
+                    title = "Sin horarios",
+                    subtitle = "Agregá un horario con hora y recordatorio.",
+                )
+            }
+        } else {
+            items(ui.schedules) { sched ->
+                AppCard(Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                scheduleTimeLabel(sched.time),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextPrimary,
+                            )
+                            Text(
+                                scheduleTagLabel(sched.tag),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary,
+                            )
+                        }
+                        IconButton(onClick = { vm.scheduleDel(sched.index) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = TextSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfigSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, color = TextPrimary)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -1090,6 +1521,25 @@ private val labTemplates = listOf(
     LabTemplate("game play", """{"type":"chess_req","data":{"op":"play"}}"""),
     LabTemplate("photo in", """{"type":"photo_req","data":{"op":"in"}}"""),
     LabTemplate("photo sync", """{"type":"photo_req","data":{"op":"sync","server":{"ip":"TU_IP","port":9090}}}"""),
+    LabTemplate("setting lang", """{"type":"setting_req","data":{"op":"lang","langcode":"es"}}"""),
+    LabTemplate("setting 24hour", """{"type":"setting_req","data":{"op":"24hour","option":0}}"""),
+    LabTemplate("setting temp 0", """{"type":"setting_req","data":{"op":"temp","option":0}}"""),
+    LabTemplate("setting temp 1", """{"type":"setting_req","data":{"op":"temp","option":1}}"""),
+    LabTemplate("setting length 0", """{"type":"setting_req","data":{"op":"length","option":0}}"""),
+    LabTemplate("setting length 1", """{"type":"setting_req","data":{"op":"length","option":1}}"""),
+    LabTemplate("setting otanotify", """{"type":"setting_req","data":{"op":"otanotify","option":0}}"""),
+    LabTemplate("setting chatty", """{"type":"setting_req","data":{"op":"chatty","option":0}}"""),
+    LabTemplate("setting doubletap", """{"type":"setting_req","data":{"op":"doubletap","option":0}}"""),
+    LabTemplate("setting quiet_list", """{"type":"setting_req","data":{"op":"quiet_list"}}"""),
+    LabTemplate("setting quiet_add", """{"type":"setting_req","data":{"op":"quiet_add","from":"22:00","to":"07:00"}}"""),
+    LabTemplate("setting quiet_del", """{"type":"setting_req","data":{"op":"quiet_del","index":0}}"""),
+    LabTemplate("setting schedule_list", """{"type":"setting_req","data":{"op":"schedule_list"}}"""),
+    LabTemplate("setting schedule_add", """{"type":"setting_req","data":{"op":"schedule_add","time":800,"tag":0}}"""),
+    LabTemplate("setting schedule_del", """{"type":"setting_req","data":{"op":"schedule_del","index":0}}"""),
+    LabTemplate("setting schedule_switch", """{"type":"setting_req","data":{"op":"schedule_switch","switch":"on"}}"""),
+    LabTemplate("setting wakemodel", """{"type":"setting_req","data":{"op":"wakemodel","model":0}}"""),
+    LabTemplate("setting lastname", """{"type":"setting_req","data":{"op":"lastname","name":"AIBI"}}"""),
+    LabTemplate("setting birthday", """{"type":"setting_req","data":{"op":"birthday","birthday":"2024-01-01"}}"""),
 )
 
 private data class FactoryAction(
@@ -1228,11 +1678,33 @@ private fun LabPane(vm: RobotViewModel, ui: UiState) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    "Las respuestas del robot se ven en la sub-pestaña Log BLE.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary,
-                )
+                if (ui.lastRawResponse != null) {
+                    val resp = ui.lastRawResponse!!
+                    val respColor = when {
+                        "\"_ok\"" in resp -> StatusGreen
+                        resp.contains("_no") || resp.contains("error") ->
+                            MaterialTheme.colorScheme.error
+                        else -> TextSecondary
+                    }
+                    Text(
+                        "Última respuesta del robot",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TextSecondary,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = resp,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = respColor,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    Text(
+                        "La respuesta del último comando aparece acá; el tráfico completo, en la sub-pestaña Log BLE.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                }
             }
         }
         item {
@@ -1304,8 +1776,13 @@ private fun LabPane(vm: RobotViewModel, ui: UiState) {
         }
         item {
             AppCard(Modifier.fillMaxWidth()) {
-                Text("Acciones de fábrica", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+                Text("Acciones de fábrica (observadas en vivo, sin confirmar en fuentes)", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
                 Spacer(Modifier.height(4.dp))
+                Text(
+                    "Los rangos provienen de pruebas empíricas; la tabla oficial vive en el firmware del cerebro (aún no extraído).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
                 Text(
                     "Secuencias ya validadas en vivo. Las destructivas cortan el BLE o reconstruyen el sistema.",
                     style = MaterialTheme.typography.bodySmall,
@@ -1422,6 +1899,19 @@ private fun DiagPane(ui: UiState) {
                     StatusPill(ui.conn, ui.reconnectAttempt, ui.connHint)
                 }
                 Spacer(Modifier.height(8.dp))
+                val rssiColor = when {
+                    ui.bleRssi == null -> TextSecondary
+                    ui.bleRssi!! >= -55 -> StatusGreen
+                    ui.bleRssi!! >= -75 -> Warning
+                    else -> MaterialTheme.colorScheme.error
+                }
+                DiagRow("RSSI", ui.bleRssi?.let { "$it dBm" } ?: "—", valueColor = rssiColor)
+                DiagRow("Modo", ui.currentMode ?: "—")
+                DiagRow(
+                    "Último RX",
+                    if (ui.lastRxSeconds >= 0) "hace ${ui.lastRxSeconds}s" else "—",
+                )
+                DiagRow("Reconexión", if (ui.reconnectAttempt > 0) "intento ${ui.reconnectAttempt}" else "—")
                 DiagRow(
                     "Firmware",
                     if (ui.info.version.isNotEmpty())
@@ -1497,18 +1987,67 @@ private fun wifiConnStateLabel(state: WifiConnState): String = when (state) {
 // Log BLE
 // ---------------------------------------------------------------------------
 
+private fun exportLog(context: Context, vm: RobotViewModel) {
+    val file = vm.exportLogFile()
+    if (file == null) {
+        Toast.makeText(context, "No se pudo exportar el log", Toast.LENGTH_SHORT).show()
+        return
+    }
+    try {
+        val uri = FileProvider.getUriForFile(context, "com.wil.aibipilot.fileprovider", file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Compartir log BLE"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "Log guardado en ${file.parent}", Toast.LENGTH_LONG).show()
+    }
+}
+
 @Composable
 private fun LogPane(vm: RobotViewModel, ui: UiState) {
+    val context = LocalContext.current
     var filters by remember { mutableStateOf(setOf<LogCat>()) }
+    var autoScroll by rememberSaveable { mutableStateOf(true) }
+    var confirmClear by remember { mutableStateOf(false) }
     val visible = remember(ui.log, filters) {
         ui.log.filter { filters.isEmpty() || it.cat in filters }
     }
     val listState = rememberLazyListState()
-    LaunchedEffect(visible.size) {
-        if (visible.isNotEmpty()) listState.animateScrollToItem(visible.size - 1)
+    LaunchedEffect(visible.size, autoScroll) {
+        if (autoScroll && visible.isNotEmpty()) listState.animateScrollToItem(visible.size - 1)
+    }
+    LaunchedEffect(confirmClear) {
+        if (confirmClear) {
+            delay(3000)
+            confirmClear = false
+        }
     }
 
     Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Log BLE",
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                if (filters.isEmpty()) "${ui.log.size} líneas"
+                else "mostrando ${visible.size} de ${ui.log.size}",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary,
+            )
+            Spacer(Modifier.width(12.dp))
+            Text("Auto-scroll", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+            Switch(
+                checked = autoScroll,
+                onCheckedChange = { autoScroll = it },
+            )
+        }
+        Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Row(
                 Modifier.weight(1f).horizontalScroll(rememberScrollState()),
@@ -1524,8 +2063,24 @@ private fun LogPane(vm: RobotViewModel, ui: UiState) {
                     )
                 }
             }
-            IconButton(onClick = { vm.clearLog() }) {
-                Icon(Icons.Default.Delete, contentDescription = "Limpiar", tint = TextSecondary)
+            IconButton(onClick = { exportLog(context, vm) }) {
+                Icon(Icons.Default.Share, contentDescription = "Exportar", tint = TextSecondary)
+            }
+            IconButton(
+                onClick = {
+                    if (confirmClear) {
+                        vm.clearLog()
+                        confirmClear = false
+                    } else {
+                        confirmClear = true
+                    }
+                },
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = if (confirmClear) "Tocar de nuevo para confirmar" else "Limpiar",
+                    tint = if (confirmClear) Warning else TextSecondary,
+                )
             }
         }
         Spacer(Modifier.height(8.dp))

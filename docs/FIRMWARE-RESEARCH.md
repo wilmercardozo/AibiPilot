@@ -201,6 +201,27 @@ Ejecutado con el robot real (AIBI-CF6A, fw 1.7.0) usando el barrido integrado en
   robot a través nuestro; con eso su flujo avanza y el promiscuo/SNI captura la URL del
   firmware. Alternativa: panel del TP-Link (DNS del DHCP → nuestra PC).
 
+### CAPTURADO: la red de descargas del robot (28 sep — ¡EXITO!)
+
+- **Puente ESP32 definitivo** (sketch `/tmp/esp-spy`): AP abierto `AIBI-CAP` + STA al hotspot
+  del iPhone + **NAT** (`esp_netif_napt_enable`, disponible en el core arduino-esp32 3.3.11)
+  + **DNSServer** respondiendo la IP real de `api.aibipocket.com` (47.251.29.223) + **modo
+  promiscuo** parseando frames 802.11 (QoS 24/26), LLC/SNAP, IPv4, TCP/UDP, imprimiendo
+  destinos IP y payloads en claro (AP abierto = sin cifrado).
+- **Secuencia de fábrica mapeada** (motion 97-100 = 0x61-0x64 la dispara):
+  motion tests ("head neck base" ≈ cmd 52-53, "SER MIC NUM 1" ≈ cmd 85) → pantalla blanca →
+  IR TEST → SD FORMAT OK → REBUILD SYSTEM → conectar WiFi → **descarga de assets**.
+- **CDN de contenido descubierto**: `api-guigu.aibipocket.com` (= 47.251.29.223, Aliyun),
+  HTTP PLANO, patrón `/<categoría>/dl/<id>`. Capturadas en vivo las URLs:
+  - `http://api-guigu.aibipocket.com/poweron/dl/319e70a5c54bc1058ad49f6d9e434f66ddf374935d0e096d4f49b53414e7df83f3` → MP3 33KB (sonido de encendido)
+  - `.../poweron/dl/313e4742c8d848d7309a4cfec5192f87625baf24c56df2aa905ebb8bcb140fb34f` → MP3 23KB
+  - `.../tts/dl/20260929bb0142bf7d041ab5b12ed3e0f04b5c53` → MP3 21KB (TTS; nombre con fecha)
+- **Lo que sigue**: (a) re-correr el flujo con el robot en AIBI-CAP para capturar el CATÁLOGO
+  completo de assets (cada GET = un archivo; categorías: poweron, tts, …); (b) el binario del
+  FIRMWARE no está en este flujo (es el OTA vía `op:"update"`, y el robot ya está en la
+  última versión 1.7.0 → no hay descarga hasta que salga la próxima; el watcher de la API lo
+  avisará); (c) probar más endpoints de lista en la API (los probados dan 404).
+
 **UART/bootloader — resolvería todo, requiere abrir el robot:**
 - Todos los ESP32 arrancan por UART0 a 115200; con GPIO0 a GND durante el reset entran a
   **modo download**. Con pads UART0/GPIO0/EN expuestos y un adaptador USB-UART 3.3V:

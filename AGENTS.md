@@ -71,7 +71,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - `ui/Screens.kt` — scaffold: Destination enum (5 destinos), AibiPilotApp, ConnectedHeader
 - `ui/ConnectScreen.kt` — wizard de conexión (permisos → despertar → escanear + reconexión rápida)
 - `ui/HomeScreen.kt` (dashboard) · `ChatScreen.kt` · `TalkScreen.kt` · `GamesScreen.kt` ·
-  `ToolsScreen.kt` (Luces/Alarmas/Fotos/Log BLE)
+  `ToolsScreen.kt` (Luces/Alarmas/Rutinas/Fotos/WiFi/Remoto/Laboratorio/Configuración/
+  Diagnóstico/Log BLE)
 - `ui/theme/Theme.kt` (tema "Tech limpio" oscuro/claro/sistema) · `ui/components/Components.kt`
 - `ble/RemoteController.kt` — conexión BLE standalone para el modo remoto (ensureMode-lite,
   un request en vuelo, keep-alive) · `ble/RemoteApiServer.kt` — API HTTP local (token Bearer,
@@ -81,6 +82,21 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   (WorkManager 15 min, ventana [ahora-14min, ahora] con wrap de medianoche)
 - `DESIGN.md` — diseño del rediseño UX (sistema visual, pantallas, copy) · `docs/HERMES.md` —
   guía de integración con Hermes Agent (modo remoto)
+
+## Datos de la configuración del robot (settings oficiales, 28 sep — builders del decompilado)
+- Pestaña "Configuración": `setting_req` con ops reales: `lang`+langcode (12 idiomas),
+  `24hour`, `temp`/`length` (option 0/1), `otanotify`, `chatty`, `selfani`, `tapani`,
+  `doubletap`, `wakemodel`+model, `quiet_list/add/del` (from/to String), `schedule_list/add/
+  del/switch` (**campo `switch`, NO `str`**), `lastname`+name, `birthday`.
+- Verificado en vivo: `lang es` → `setting_lang_ok`, `wakemodel 1` → `setting_wakemodel_ok`.
+- Módulos del oficial NO mapeados aún (ops del decompilado): buyFood (buyfood/feed), changeLook
+  (buyglass/wearglass), meet (list/add/del/rescan), tarot (shuffle/choose/read), coaster
+  (start/over), friends (messages/list/send…).
+- Los IDs del `motion` BLE no están en ninguna fuente (los sirve el servidor de debug; viven en
+  el firmware del cerebro). Los rangos observados (24-26 diskmode, 97-100 fábrica, 52-53 test
+  servos, 85 mic) son EMPÍRICOS — la app los marca así.
+- Foto: `photo_single` (op "single") toma foto; el sync responde `photo_sync_no "No photos in
+  AIBI"` si la SD está vacía.
 
 ## Datos del modo remoto y rutinas (subproyecto C, verificado en vivo 22 sep)
 - Modo remoto: toggle en Herramientas → servicio foreground toma LA conexión BLE (una a la
@@ -109,18 +125,12 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## Investigación de firmware (subproyecto D, 22 sep — ver docs/FIRMWARE-RESEARCH.md)
 - SoC del robot: **Espressif ESP32** (OUI MAC B4:3A:45 + EspRFTestTool_v2.6 en reporte FCC)
-- OTA: `api.aibipocket.com` sin auth; la app solo manda `setting_req op:"update"` y el robot
-  descarga por SU WiFi. El binario del firmware NO es accesible públicamente.
-- Canal BLE binario `DD CC`: sin consumidor en la app oficial; sondeable desde AibiPilot
-  (ya loguea "RX binario"). El comando `motion 55 AA 55 AA 21 <cmd>...ED` es la única primitiva
-  binaria TX (pantalla de debug oculta, `POST /aibiapp/support/testpage` code==200, no
-  allowlisteada para nuestro robot).
-- **⚠ NO barrer `motion` a ciegas**: cmds 0x18-0x1A activan "diskmode" (modo fábrica que mata
-  el BLE; sin salida por software) y 0x61 (97) dispara un rebuild completo del filesystem
-  (descarga→extract→reboot, posible reset de datos). Ambos con botones físicos de recuperación
-  bajo la tapa superior (power + reset).
-- **Botones físicos: 2, bajo la tapa superior** (removible): uno = power off, otro = reset.
-  La reconexión automática de la app sobrevive un reset real (~8s).
-- Incógnitas que bloquean firmware propio: binario del firmware + estado de eFuses del ESP32
-  (secure boot/flash encryption). Vías: captura WiFi de OTA, o UART (abrir el robot →
-  espefuse.py summary).
+- Arquitectura confirmada por los binarios del bundle SD (28 sep): **cerebro ESP32-S3** (BLE +
+  protocolo, OTA `op:update`, AUSENTE del zip), **pcam ESP32-S3** (cámara/MobileFaceNet/ESP-SR),
+  **body y base STM32 Cortex-M** (servos, comandos SPI `hoffset/noffset/boffset/…` con CRC).
+- **Sin firma ni secure-boot** (`esptool image_info`: Secure version 0) → firmware propio
+  factible: descargar (MITM, el robot no valida cert) → parchear → rehashear → reinyectar por
+  OTA o UART (conector 4 pines atrás).
+- CDN de contenido: `api-guigu.aibipocket.com` (HTTP plano, `/<cat>/dl/<id>`) y
+  `res-us-east-1.living.ai` (OSS Aliyun público; el zip `aibi-sd1.7.0.zip` 492MB está en
+  `Firmware/`, gitignoreado).

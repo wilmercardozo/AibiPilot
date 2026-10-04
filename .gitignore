@@ -21,3 +21,13 @@ captures/
 # Metodología (workspace de ejecución, no se commitea)
 .metodologia/
 .superpowers/
+
+# Firmware del robot (blob de ~557MB + copyright de Living.AI, no se commitea)
+Firmware/
+
+# Research y reportes locales (no se publican)
+research_notes/
+reports/
+
+# Credenciales locales del esp-spy (usar secrets.example.h como plantilla)
+docs/esp32-spy/secrets.h

@@ -297,3 +297,109 @@ protocolo existente (lo que ya hace AibiPilot) y no la elusión.
 eFuses; el hardware (ESP32) no lo impide y existe un camino de 2 pasos (sondear `DD CC` por
 BLE, capturar la OTA por WiFi) más uno fuera de alcance (UART) que resuelve todas las
 incógnitas. "No demostrable aún" ≠ "imposible".
+
+---
+
+## RESUELTO: URL del firmware capturada por MITM de TLS (28 sep 2026)
+
+El gap crítico de la Capa 2 (binario no accesible) **quedó cerrado sin abrir el robot**,
+via MITM de TLS sobre el puente ESP32. Método y resultado:
+
+### Hallazgo que lo habilita todo
+**El robot NO valida el certificado TLS.** Al redirigir `res-us-east-1.living.ai` a un
+mitmproxy con certificado propio, el robot completó el handshake y bajó el firmware por el
+proxy. Es el candado que faltaba: habilita capturar la URL, el binario, y (a confirmar)
+inyectar firmware modificado por el mismo OTA. Primer registro de esto en el AIBI Pocket.
+
+### La URL del firmware (capturada en vivo)
+```
+GET https://res-us-east-1.living.ai/aibi/version/all/202607181058/aibi-sd1.7.0.zip
+-> 200 OK · Content-Length: 516430631 (~492 MB) · application/x-zip-compressed
+   ETag: BE0B4DABA4CA6AC1258E18B6839069E6 · x-oss-hash-crc64ecma: 17869637200052244576
+   Last-Modified: Sat, 18 Jul 2026 03:01:42 GMT · build 202607181058
+```
+- Servidor: `res-us-east-1.living.ai` → `us-east-1-living-res.oss-us-east-1.aliyuncs.com`
+  (Aliyun OSS, us-east-1), **objeto público**: descargable con `curl` desde cualquier red,
+  sin auth, verificado con HEAD directo (200 + mismos headers).
+- Es la imagen de contenido de **SD** de la 1.7.0 (`aibi-sd1.7.0.zip`), no un `app.bin` suelto:
+  el binario del ESP32 (y posible K210) está DENTRO del zip → pendiente `unzip -l` + `binwalk`.
+
+### El banco de captura (todo en `docs/esp32-spy/`)
+```
+ROBOT → (DNS del ESP miente: res-us-east-1 → 192.168.4.1) → ESP:443
+      → relay TCP del ESP → PC 172.20.10.10:443 (mitmproxy reverse) → Aliyun real
+```
+- **Por qué el relay**: el NAPT del ESP no reenvía tráfico del robot a un host de su propia
+  subred STA (la PC en el hotspot). Solución: el robot pega al ESP mismo (192.168.4.1) y el
+  ESP relaya el TCP a la PC (`relay443()` en `esp-spy.ino`). El TLS queda end-to-end
+  robot↔mitmproxy; el ESP solo bombea bytes.
+- **Gotchas resueltos**: (a) el robot ignora el DNS del DHCP y usa el gateway → hubo que
+  poner un DNS server en el ESP; (b) `firewalld` (zona FedoraWorkstation) bloqueaba el :443
+  entrante → `firewall-cmd --add-port=443/tcp`; (c) pyserial dejaba el ESP en modo download
+  → el logger fuerza modo RUN al abrir; (d) la caché DNS del robot obliga a resetearlo entre
+  intentos. `MITM_HOST` en el sketch activa/desactiva todo (vacío = transparente).
+- mitmproxy: `mitmdump --mode reverse:https://res-us-east-1.living.ai -p 443 --set ssl_insecure=true -w captura.mitm`
+
+### Próximo paso
+Bajar el zip (desde red NO-hotspot: son 492 MB de datos móviles) → `unzip -l` → localizar el
+binario del ESP32 (`esp32_image_parser` → ELF → Ghidra) **y el archivo de integridad**:
+si es solo checksum SHA-256 (como el EMO, mismo fabricante) → firmware propio inyectable por
+OTA vía este mismo MITM; si está firmado → queda en análisis. Ver prior-art EMO: `emo-libre`.
+
+---
+
+## Análisis del contenido de `aibi-sd1.7.0.zip` (28 sep 2026)
+
+Bajado (492 MB), descomprimido en `Firmware/aibi-sd1.7.0/` (gitignoreado). Resultado:
+**es el bundle de contenido de la SD, NO el firmware del cerebro BLE.**
+
+### Arquitectura del robot (3 procesadores, confirmada por los binarios)
+| Binario (`bin/`) | Chip | Rol | Notas |
+|---|---|---|---|
+| `pcam.bin` (2.4 MB) | **ESP32-S3** (Xtensa LX7) | Coprocesador de **cámara + reconocimiento facial + voz** | proyecto "pocket", IDF v4.4.6, compilado 5-jun-2024. Red neuronal `mfn`/MobileFaceNet (`face_recognition_tool.cpp`, `get_face_info`), cámara (LCD_CAM), ESP-SR. **Es SPI slave**, host `api.livingai.cn`. **NO tiene stack BLE ni el protocolo JSON.** |
+| `body.bin` (32 KB) | **ARM Cortex-M** (STM32, base `0x08000000`) | Controlador del **cuerpo**: servos HEAD y NECK | Protocolo SPI con CRC hacia el cerebro |
+| `base.bin` (35 KB) | **ARM Cortex-M** (STM32) | Controlador de la **base**: servo + sensor de ángulo + LED | Idem |
+| `bootloader.bin`, `partition-table.bin` | ESP32-S3 | Del pcam | Flash 8MB, DIO |
+
+Partición ESP32-S3: `nvs`(24K) · `phy_init`(4K) · **`factory` app 5072K** · `fr`(128K, datos de cara).
+**Una sola partición de app, sin OTA A/B** → la actualización reemplaza `factory` directo.
+
+Otras carpetas del zip = assets: `-2070539545/` modelos **ESP-SR** (wake-word `wn9_hilexin` = "Hi Lexin",
+MultiNet `mn6_en`/`mn7_en` comandos EN, `fst/commands_en.txt`); `-555337285/<version>/` audio/animaciones/TTS
+por versión (1.0.0→1.7.0); `custom/photo` fotos del usuario.
+
+### Integridad: SIN firma, SIN encriptación (verde para firmware propio)
+`esptool image_info pcam.bin`: `Secure version: 0`, `Validation hash: valid` (SHA256 estándar de
+integridad), **ningún bloque de secure-boot ni flash-encryption**. Igual que el EMO. → Se puede
+modificar `pcam.bin`, recalcular el hash con esptool, y pasa la verificación. Los ARM usan CRC
+(`pota_crc`, mensajes `ota com err`), también recalculable.
+
+### Protocolo SPI interno cerebro↔controladores (extraído de body.bin/base.bin)
+Comandos de 4 chars con CRC. En **body.bin** (cuerpo): `pota` (OTA del ARM), `hoffset`/`hreoffset`
+(calibración servo HEAD), **`noffset`/`nreoffset` (calibración/validación servo NECK)**, `angle`,
+`irda` (IR), `plow`, `prps`, `reoffset`. En **base.bin** (base): `bota` (OTA base), `boffset`/`breoffset`,
+`led`, `angle_voltage`. Structs: `robot_servo_ctrl[ROBOT_SERVO_TYPE_HEAD/NECK]` con `.adc_value`
+(potenciómetro de feedback) y `.Offset`. Vars: `run_mode`, `Position_mode`, `H/N_adc_value`, `Led_state`.
+→ **La "validación de cuello" = `noffset`/`nreoffset`**: el ARM lee el ADC del potenciómetro del NECK y
+ajusta/valida el offset contra `boardConfig`.
+
+### ⚠️ Lo que este zip NO tiene: el cerebro BLE (donde vive el dispatch de `motion`)
+El firmware que corre el **protocolo BLE** (`_req/_rsp/_in`, `wifiset`, el frame `motion 55AA55AA21<n>`,
+la secuencia de fábrica, el `op:update`) **no está en el zip** — no hay imagen ESP con BLE ni los tokens
+del protocolo en ningún binario. Es un ESP32 aparte (SPI master que coordina pcam + body + base),
+actualizado por su propio OTA `op:update`. Probados como objetos hermanos en el bucket
+(`aibi-app/esp/fw/ble/mcu/core...1.7.0.zip`) → **todos 404**; el bucket no lista (`AccessDenied`).
+
+**Consecuencia para el mapeo `motion`-ID→acción (barrido 27-100):**
+- **Mecánica de servos** (head/neck/base, calibración, validación de cuello) → decodificable de
+  `body.bin`/`base.bin` en Ghidra (ARM Cortex-M nativo, 32-35 KB).
+- **IDs que disparan update / diskmode / factory** → viven en el cerebro BLE (ausente). Para obtenerlo:
+  forzar el `op:update` por MITM del `ota/checkupdate` (el robot no valida cert → factible con el mismo
+  banco), o capturar el OTA del cerebro cuando salga una versión nueva.
+
+### Herramientas de análisis (en la workstation)
+- `/tmp/esp2elf.py`: convierte imagen de app ESP32 → ELF Xtensa (segmentos PT_LOAD con load-addr reales).
+  `pcam.bin` → `/tmp/pcam.elf` (`file`: "ELF 32-bit LSB, Tensilica Xtensa"). Code en `0x42000020` (IROM).
+- `xtensa-esp32s3-elf-objdump` (del core arduino-esp32) para desensamblar Xtensa LX7.
+- Ghidra 11.2.1 en `/tmp/ghidra_11.2.1_PUBLIC` (JDK17): ARM nativo para body/base.bin; Xtensa necesita
+  módulo de procesador de terceros (LX7).

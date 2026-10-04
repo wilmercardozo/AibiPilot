@@ -26,7 +26,20 @@ const int NUM = sizeof(servers) / sizeof(servers[0]);
 // DNS=8.8.8.8 (vía dhcps_option en setup) y el robot resuelve TODO en real
 // a través del NAT. Nosotros solo observamos en pasivo (promiscuo).
 #include <WiFiUdp.h>
-WiFiUDP dnsUdp;
+WiFiUDP dnsUdp;   // escucha DNS del robot en 192.168.4.1:53
+WiFiUDP dnsFwd;   // reenvia al upstream real
+// DNS del bridge. Por defecto TRANSPARENTE: reenvia todo a 8.8.8.8 (el robot
+// resuelve de verdad y sale por el NAT). Para MITM de la OTA, poner
+// MITM_HOST="api.aibipocket.com" y MITM_IP = IP de la PC en el hotspot: el robot
+// resolvera ese host a la PC, donde corre el server falso que fuerza el update
+// (downgrade) y captura la URL/binario del firmware.
+// MITM DESACTIVADO (transparente). Para re-capturar/inyectar firmware, poner
+// MITM_HOST="res-us-east-1.living.ai" (el robot no valida el cert: el MITM funciona)
+// y levantar mitmproxy en la PC (172.20.10.10:443) — ver docs/FIRMWARE-RESEARCH.md.
+const char* MITM_HOST = "";
+IPAddress MITM_IP(192, 168, 4, 1);    // el robot pega al ESP mismo...
+IPAddress RELAY_TO(172, 20, 10, 10);  // ...y el ESP relaya ese TCP a la PC (mitmproxy)
+IPAddress DNS_UP(8, 8, 8, 8);
 
 String stations[4][2];
 int stationCount = 0;
@@ -118,11 +131,17 @@ void promiscCb(void* buf, wifi_promiscuous_pkt_type_t type) {
     int tcpHdr = ((l4[12] >> 4) & 0x0F) * 4;
     int dport = (l4[2] << 8) | l4[3];
     int payLen = totalLen - tcpHdr;
-    if (payLen > 0 && now - lastPayloadT > 400) {
+    if (payLen > 0) {
       int maxDump = (dport == 80) ? 512 : 180;   // HTTP: headers completos
       String p = printable(l4 + tcpHdr, payLen, maxDump);
-      if (p.indexOf("GET") >= 0 || p.indexOf("POST") >= 0 || p.indexOf("Host:") >= 0 || p.length() > 10) {
+      bool isReq = p.startsWith("GET ") || p.startsWith("POST ") ||
+                   p.indexOf("GET /") >= 0 || p.indexOf("POST /") >= 0;
+      if (isReq) {
+        // toda peticion HTTP se loguea SIN throttle: no perder GETs en rafaga
+        // (mapeo de catalogo / OTA). El throttle solo aplica al resto de payloads.
         logLine("  TCP:" + String(dport) + " | " + p);
+      } else if (now - lastPayloadT > 400 && (p.indexOf("Host:") >= 0 || p.length() > 10)) {
+        logLine("  TCP:" + String(dport) + " | " + p);   // resto (incl. SNI de 443)
         lastPayloadT = now;
       }
     }
@@ -151,6 +170,88 @@ void dumpClient(WiFiClient client, const char* name) {
   client.stop();
 }
 
+// extrae el qname (dotted) de un paquete DNS
+String dnsQName(uint8_t* p, int len) {
+  String n = "";
+  int i = 12;
+  while (i < len && p[i] != 0) {
+    int l = p[i++];
+    if (l <= 0 || i + l > len) break;
+    if (n.length()) n += ".";
+    for (int j = 0; j < l; j++) n += (char)p[i++];
+  }
+  return n;
+}
+
+// DNS del bridge: MITM_HOST -> MITM_IP; el resto se reenvia real a 8.8.8.8.
+void handleDns() {
+  int sz = dnsUdp.parsePacket();
+  if (sz <= 0) return;
+  uint8_t q[512];
+  int n = dnsUdp.read(q, sizeof(q));
+  if (n < 12) return;
+  IPAddress cip = dnsUdp.remoteIP();
+  uint16_t cport = dnsUdp.remotePort();
+  String name = dnsQName(q, n);
+
+  if (MITM_HOST[0] && name.equalsIgnoreCase(MITM_HOST) && n + 16 <= 512) {
+    uint8_t r[512];
+    memcpy(r, q, n);
+    r[2] = 0x81; r[3] = 0x80;                 // QR=1, RD, RA
+    r[6] = 0; r[7] = 1;                        // ANCOUNT=1
+    int o = n;
+    r[o++] = 0xC0; r[o++] = 0x0C;             // puntero al qname
+    r[o++] = 0; r[o++] = 1;                   // type A
+    r[o++] = 0; r[o++] = 1;                   // class IN
+    r[o++] = 0; r[o++] = 0; r[o++] = 0; r[o++] = 60;   // TTL
+    r[o++] = 0; r[o++] = 4;                   // RDLENGTH
+    r[o++] = MITM_IP[0]; r[o++] = MITM_IP[1]; r[o++] = MITM_IP[2]; r[o++] = MITM_IP[3];
+    dnsUdp.beginPacket(cip, cport); dnsUdp.write(r, o); dnsUdp.endPacket();
+    logLine("DNS-MITM " + name + " -> " + MITM_IP.toString());
+    return;
+  }
+
+  // transparente: reenviar tal cual a 8.8.8.8 y devolver la respuesta al robot
+  dnsFwd.beginPacket(DNS_UP, 53); dnsFwd.write(q, n); dnsFwd.endPacket();
+  unsigned long t0 = millis();
+  while (millis() - t0 < 300) {
+    int rs = dnsFwd.parsePacket();
+    if (rs > 0) {
+      uint8_t rb[512];
+      int rn = dnsFwd.read(rb, sizeof(rb));
+      dnsUdp.beginPacket(cip, cport); dnsUdp.write(rb, rn); dnsUdp.endPacket();
+      if (name.length()) logLine("DNS " + name);
+      return;
+    }
+    delay(2);
+  }
+}
+
+// Relay TCP: robot -> ESP:443 -> PC:443 (mitmproxy). El TLS es end-to-end
+// robot<->mitmproxy; el ESP solo bombea bytes en ambos sentidos (transparente).
+void relay443(WiFiClient robot) {
+  WiFiClient up;
+  if (!up.connect(RELAY_TO, 443)) {
+    logLine("relay443: no conecto a PC");
+    robot.stop();
+    return;
+  }
+  logLine("relay443 abierto robot<->PC");
+  uint8_t buf[512];
+  unsigned long last = millis();
+  while ((robot.connected() || up.available()) && millis() - last < 20000) {
+    bool moved = false;
+    int n = robot.available();
+    if (n > 0) { int r = robot.read(buf, n > 512 ? 512 : n); if (r > 0) { up.write(buf, r); moved = true; } }
+    n = up.available();
+    if (n > 0) { int r = up.read(buf, n > 512 ? 512 : n); if (r > 0) { robot.write(buf, r); moved = true; } }
+    if (moved) last = millis(); else delay(1);
+  }
+  robot.stop();
+  up.stop();
+  logLine("relay443 cerrado");
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -171,7 +272,7 @@ void setup() {
     // resuelva api.aibipocket.com de verdad y descargue por el NAT.
     esp_netif_dns_info_t dnsInfo;
     dnsInfo.ip.type = ESP_IPADDR_TYPE_V4;
-    dnsInfo.ip.u_addr.ip4.addr = esp_ip4addr_aton("8.8.8.8");
+    dnsInfo.ip.u_addr.ip4.addr = esp_ip4addr_aton("192.168.4.1");  // el bridge ES el DNS
     esp_netif_set_dns_info(ap_netif, ESP_NETIF_DNS_MAIN, &dnsInfo);
     esp_netif_dhcps_option(ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
                            &dnsInfo, sizeof(dnsInfo));
@@ -187,14 +288,20 @@ void setup() {
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_promiscuous_rx_cb(promiscCb);
   for (int i = 0; i < NUM; i++) servers[i].begin();
+  dnsUdp.begin(53);
+  dnsFwd.begin(0);
   logLine(String("[+] AP ") + AP_SSID + " 192.168.4.1");
   logLine("[+] bridge transparente: DNS real (8.8.8.8) por NAT, solo observamos");
 }
 
 void loop() {
+  handleDns();
   for (int i = 0; i < NUM; i++) {
     WiFiClient c = servers[i].available();
-    if (c) dumpClient(c, portNames[i]);
+    if (c) {
+      if (i == 1) relay443(c);        // 443: relay TLS transparente a la PC
+      else dumpClient(c, portNames[i]);
+    }
   }
   // display NO bloqueante: 4s por pantalla alternando
   static unsigned long lastRender = 0;

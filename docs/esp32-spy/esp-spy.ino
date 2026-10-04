@@ -4,10 +4,9 @@
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
 
-const char* AP_SSID = "AIBI-CAP";
-const char* AP_PASS = "<REDACTADO>";
-const char* STA_SSID = "<REDACTADO>";
-const char* STA_PASS = "<REDACTADO>";
+// Credenciales locales: copiá secrets.example.h a secrets.h y rellená tus datos.
+// secrets.h está en .gitignore y nunca se commitea.
+#include "secrets.h"
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -84,6 +83,7 @@ void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   }
 }
 
+// MAC WiFi de TU robot (b4:3a:45 = Espressif): reemplazá con la de tu unidad
 const uint8_t robotMac[6] = {0xb4, 0x3a, 0x45, 0xaa, 0xbb, 0xcc};
 String lastDst = "";
 unsigned long lastDstT = 0;

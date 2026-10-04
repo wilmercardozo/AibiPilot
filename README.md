@@ -22,6 +22,20 @@ App Android alternativa (Kotlin + Jetpack Compose) para controlar el robot **AIB
 
 Todo lo implementado fue **verificado en vivo** contra el robot real (septiembre–octubre 2026). El proyecto está en desarrollo activo; hay bugs conocidos y roadmap documentados en `docs/` (ver `docs/HANDOFF-OPENCODE.md`).
 
+## Capturas
+
+| Inicio | Chat IA |
+|:---:|:---:|
+| ![Inicio](docs/screenshots/01-inicio.png) | ![Chat IA](docs/screenshots/02-chat.png) |
+
+| Hablar | Juegos |
+|:---:|:---:|
+| ![Hablar](docs/screenshots/03-hablar.png) | ![Juegos](docs/screenshots/04-juegos.png) |
+
+| Herramientas |
+|:---:|
+| ![Herramientas](docs/screenshots/05-herramientas.png) |
+
 ## Documentación
 
 - `AGENTS.md` — datos técnicos clave del protocolo y estado del proyecto

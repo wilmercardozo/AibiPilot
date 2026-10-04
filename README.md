@@ -27,6 +27,10 @@ Todo lo implementado fue **verificado en vivo** contra el robot real (septiembre
 - `AGENTS.md` — datos técnicos clave del protocolo y estado del proyecto
 - `docs/` — investigación de firmware, banco de captura esp32-spy, integración Hermes, diseño UX
 
+## Firmware e investigación
+
+El firmware de contenido del robot (bundle SD) se descarga de CDNs públicos de Living.AI. Cómo se descubrió y capturó (banco esp32-spy, DNS/relay, análisis de los binarios ESP32-S3 y STM32) está documentado en `docs/FIRMWARE-RESEARCH.md`. Este repositorio **documenta el método de obtención pero no redistribuye binarios ni contenido propietario**.
+
 ## Compilar
 
 Requisitos: JDK 17, Android SDK (platform-35, build-tools 35.0.0).
